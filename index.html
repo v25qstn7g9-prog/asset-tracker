@@ -249,6 +249,75 @@ async function fetchLiveQuotesBatch(symbols) {
   return out;
 }
 
+// Fallback source, used only when the TWSE batch call fails completely
+// (e.g. its own CORS proxies are all briefly down). A second, independent
+// data source here means both would have to fail at the same moment for
+// the panel to come up empty. Slower (one request per symbol) but that's
+// an acceptable trade-off since it's the rarer, backup path.
+async function fetchYahooQuote(symbol) {
+  const yahooSymbol = /^[0-9]/.test(symbol) ? `${symbol}.TW` : symbol;
+  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`;
+
+  let json = null;
+  let lastErr = null;
+  try {
+    const res = await fetch(targetUrl);
+    if (res.ok) json = await res.json();
+  } catch (e) {
+    lastErr = e;
+  }
+  if (!json) {
+    for (const buildProxyUrl of CORS_PROXIES) {
+      try {
+        const res2 = await fetch(buildProxyUrl(targetUrl));
+        if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
+        const parsed = await res2.json();
+        if (parsed) { json = parsed; break; }
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+  }
+  if (!json) throw lastErr || new Error("所有來源皆失敗");
+
+  const result = json?.chart?.result?.[0];
+  if (!result) throw new Error("no result");
+  const closes = result.indicators?.quote?.[0]?.close || [];
+  let lastIdx = -1;
+  for (let i = closes.length - 1; i >= 0; i--) {
+    if (closes[i] != null) { lastIdx = i; break; }
+  }
+  if (lastIdx < 0) throw new Error("no price");
+  const price = closes[lastIdx];
+  let prevIdx = -1;
+  for (let i = lastIdx - 1; i >= 0; i--) {
+    if (closes[i] != null) { prevIdx = i; break; }
+  }
+  const prevClose = prevIdx >= 0 ? closes[prevIdx] : (result.meta.chartPreviousClose ?? price);
+  return { symbol, price, prevClose, isUS: false, asOfDate: null, isStale: false };
+}
+
+async function fetchQuotesWithFallback(symbols) {
+  try {
+    return await fetchLiveQuotesBatch(symbols);
+  } catch (e) {
+    // TWSE batch call failed entirely — try Yahoo Finance per-symbol as an
+    // independent second source rather than giving up right away.
+    const out = {};
+    for (const s of symbols) {
+      try {
+        const r = await fetchYahooQuote(s);
+        out[s] = r;
+      } catch (e2) {
+        // leave this symbol out of the result; fetchAllLive's merge logic
+        // will fall back to the last cached price for it, if any.
+      }
+    }
+    if (Object.keys(out).length === 0) throw e;
+    return out;
+  }
+}
+
 
 // ---------- storage helpers ----------
 async function loadKey(key, fallback) {
@@ -733,12 +802,12 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     let quotes = null;
     try {
       try {
-        quotes = await fetchLiveQuotesBatch(symbols);
+        quotes = await fetchQuotesWithFallback(symbols);
       } catch (e) {
         // One retry after a short pause — a single flaky proxy round
         // shouldn't fail the whole refresh.
         await new Promise((res) => setTimeout(res, 800));
-        quotes = await fetchLiveQuotesBatch(symbols);
+        quotes = await fetchQuotesWithFallback(symbols);
       }
     } catch (e) {
       quotes = null;
