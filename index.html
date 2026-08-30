@@ -160,30 +160,26 @@ function findCrossing(schedule, key, target) {
 }
 
 // ---------- live price helpers (from 存股監控) ----------
-function toYahooSymbol(symbol) {
-  const s = (symbol || "").trim().toUpperCase();
-  if (!s) return s;
-  // Taiwan tickers are numeric-led (e.g. 0050, 2330, 00981A) -> append .TW
-  if (/^[0-9]/.test(s)) return `${s}.TW`;
-  return s; // US tickers used as-is (e.g. VOO, QQQ)
-}
-
 // A single free CORS proxy (e.g. allorigins.win) will occasionally rate-limit
 // or briefly go down under repeated calls from the same browser session —
-// that's why some symbols in a batch used to fail silently. Trying a short
-// list of independent proxies in order means one being flaky doesn't take
-// down the whole fetch.
+// trying a short list of independent proxies in order means one being flaky
+// doesn't take down the whole fetch.
 const CORS_PROXIES = [
   (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
   (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
   (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
 ];
 
-async function fetchLivePrice(symbol) {
-  const yahoo = toYahooSymbol(symbol);
-  // range=5d guarantees we still get the most recent trading day's bar even
-  // on weekends/holidays when there's no "today" bar to return.
-  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahoo}?interval=1d&range=5d`;
+// TWSE's own "基本市況報導" real-time quote endpoint. This is the exchange's
+// own data (not a third-party reseller like Yahoo), and — importantly — lets
+// us ask for several stocks in ONE request via "|", instead of one request
+// per symbol. That's both faster and puts far less load on the free CORS
+// proxy than looping over symbols one at a time.
+// NOTE: the "tse_" prefix is for 上市 (listed on TWSE) stocks, which covers
+// 0050 / 0056 / 2330. A 上櫃 (OTC) stock would need an "otc_" prefix instead.
+async function fetchLiveQuotesBatch(symbols) {
+  const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
+  const targetUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1&delay=0`;
 
   let json = null;
   let lastErr = null;
@@ -193,62 +189,38 @@ async function fetchLivePrice(symbol) {
     const res = await fetch(targetUrl);
     if (res.ok) json = await res.json();
   } catch (e) {
-    // expected to fail in most browsers due to CORS; fall through to proxies
+    // Expected to fail in most browsers — TWSE's MIS endpoint doesn't send
+    // CORS headers for arbitrary origins — fall through to the proxies.
     lastErr = e;
   }
 
-  if (!json) {
-    // Yahoo Finance does not send CORS headers for browser-origin requests,
-    // so route through a free public CORS proxy that fetches server-side
-    // and relays the response with the right headers. Try each proxy in
-    // turn until one works.
+  if (!json || !Array.isArray(json.msgArray)) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
         const res2 = await fetch(buildProxyUrl(targetUrl));
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
-        if (parsed) { json = parsed; break; }
+        if (parsed && Array.isArray(parsed.msgArray)) { json = parsed; break; }
       } catch (e) {
         lastErr = e;
       }
     }
   }
 
-  if (!json) throw lastErr || new Error("所有來源皆失敗");
+  if (!json || !Array.isArray(json.msgArray)) throw lastErr || new Error("所有來源皆失敗");
 
-  const result = json?.chart?.result?.[0];
-  if (!result) throw new Error("no result");
-  const meta = result.meta;
-  const isUS = !/\.TW$/.test(yahoo);
-
-  const timestamps = result.timestamp || [];
-  const closes = result.indicators?.quote?.[0]?.close || [];
-
-  // Find the last index with a real close value (handles weekends/holidays
-  // where the most recent bar(s) can be null).
-  let lastIdx = -1;
-  for (let i = closes.length - 1; i >= 0; i--) {
-    if (closes[i] != null) { lastIdx = i; break; }
-  }
-
-  let price, prevClose, asOfDate = null;
-
-  if (lastIdx >= 0) {
-    price = closes[lastIdx];
-    let prevIdx = -1;
-    for (let i = lastIdx - 1; i >= 0; i--) {
-      if (closes[i] != null) { prevIdx = i; break; }
-    }
-    prevClose = prevIdx >= 0 ? closes[prevIdx] : (meta.chartPreviousClose ?? meta.previousClose ?? price);
-    if (timestamps[lastIdx]) asOfDate = new Date(timestamps[lastIdx] * 1000);
-  } else {
-    price = meta.regularMarketPrice;
-    prevClose = meta.chartPreviousClose ?? meta.previousClose;
-  }
-
-  const isStale = meta.marketState && meta.marketState !== "REGULAR";
-
-  return { symbol, price, prevClose, isUS, asOfDate, isStale };
+  const out = {};
+  json.msgArray.forEach((item) => {
+    const symbol = item.c;
+    const prevClose = Number(item.y);
+    // "z" (成交價) is "-" before the day's first trade goes through (e.g.
+    // right after market open, or outside trading hours) — fall back to
+    // the previous close so the row still shows a sensible number.
+    const hasTraded = item.z && item.z !== "-";
+    const price = Number(hasTraded ? item.z : item.y);
+    out[symbol] = { symbol, price, prevClose, isUS: false, asOfDate: null, isStale: !hasTraded };
+  });
+  return out;
 }
 
 
@@ -672,57 +644,46 @@ function LivePricePanel({ holdings }) {
     const targets = activeRef.current;
     if (!targets.length) return;
     // Guard against overlap: if a previous run (manual or auto) is still
-    // in-flight — e.g. several symbols needed proxy fallbacks and the cycle
-    // ran past the 60s mark — skip this tick instead of firing a second,
-    // duplicate round of requests at the same free proxies.
+    // in-flight, skip this tick instead of firing a second, duplicate
+    // request at the same free proxies.
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     setLiveStatus("loading");
-    const map = {};
-    const failed = [];
+    const symbols = targets.map((h) => h.symbol);
+    let quotes = null;
     try {
-      // Fetch one at a time with a stagger instead of all-at-once — firing
-      // many parallel requests through a free CORS proxy causes it to
-      // rate-limit and silently drop most of them. Each symbol also gets one
-      // retry with backoff before being counted as failed, since a single
-      // proxy hiccup shouldn't drop that symbol for the whole refresh.
-      for (const h of targets) {
-        let ok = false;
-        for (let attempt = 0; attempt < 2 && !ok; attempt++) {
-          try {
-            const r = await fetchLivePrice(h.symbol);
-            if (r) { map[r.symbol] = r; ok = true; }
-          } catch (e) {
-            if (attempt === 0) await new Promise((res) => setTimeout(res, 700));
-          }
-        }
-        if (!ok) failed.push(h.symbol);
-        await new Promise((res) => setTimeout(res, 700));
-      }
-      const now = new Date();
-      // Merge this refresh with the last known successful price for any
-      // symbol that failed this round. This keeps the dashboard useful during
-      // temporary proxy/API hiccups instead of making that holding disappear.
-      const mergedMap = {};
-      targets.forEach((h) => {
-        if (map[h.symbol]) mergedMap[h.symbol] = map[h.symbol];
-        else if (liveRef.current[h.symbol]) mergedMap[h.symbol] = liveRef.current[h.symbol];
-      });
-      liveRef.current = mergedMap;
-      setLive(mergedMap);
-      setFailedSymbols(failed);
-      setLiveStatus(Object.keys(mergedMap).length ? "done" : "error");
-      setLiveAt(now);
-      lastFetchAtRef.current = now.getTime();
-      // Persist the merged map so failed symbols also survive an app reopen.
-      if (Object.keys(mergedMap).length) {
-        saveKey("livePrices", { map: mergedMap, failedSymbols: failed, at: now.toISOString() });
+      try {
+        quotes = await fetchLiveQuotesBatch(symbols);
+      } catch (e) {
+        // One retry after a short pause — a single flaky proxy round
+        // shouldn't fail the whole refresh.
+        await new Promise((res) => setTimeout(res, 800));
+        quotes = await fetchLiveQuotesBatch(symbols);
       }
     } catch (e) {
-      setLiveStatus("error");
-    } finally {
-      isFetchingRef.current = false;
+      quotes = null;
     }
+    const failed = symbols.filter((s) => !quotes || !quotes[s]);
+    const now = new Date();
+    // Merge this refresh with the last known successful price for any
+    // symbol that failed this round. This keeps the dashboard useful during
+    // temporary proxy/API hiccups instead of making that holding disappear.
+    const mergedMap = {};
+    targets.forEach((h) => {
+      if (quotes && quotes[h.symbol]) mergedMap[h.symbol] = quotes[h.symbol];
+      else if (liveRef.current[h.symbol]) mergedMap[h.symbol] = liveRef.current[h.symbol];
+    });
+    liveRef.current = mergedMap;
+    setLive(mergedMap);
+    setFailedSymbols(failed);
+    setLiveStatus(Object.keys(mergedMap).length ? "done" : "error");
+    setLiveAt(now);
+    lastFetchAtRef.current = now.getTime();
+    // Persist the merged map so failed symbols also survive an app reopen.
+    if (Object.keys(mergedMap).length) {
+      saveKey("livePrices", { map: mergedMap, failedSymbols: failed, at: now.toISOString() });
+    }
+    isFetchingRef.current = false;
   };
 
   // Auto-refresh when the panel is ready, then every 60 seconds. If we just
