@@ -378,6 +378,11 @@ const DAILY_SEED = [
 function AssetTracker() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState("dashboard");
+  // Set (with a fresh object each time so the effect in DailyPanel re-fires
+  // even if the same number is sent twice) when "記錄為今日資產" is pressed
+  // on the dashboard — carries the fetched TW market value over to the
+  // 每日紀錄 form so the user can add the US-side value and confirm together.
+  const [dailyPrefill, setDailyPrefill] = useState(null);
 
   const [dailyRecords, setDailyRecords] = useState([]);
   const [holdings, setHoldings] = useState([]);
@@ -598,11 +603,11 @@ function AssetTracker() {
             totalReturnPct={totalReturnPct} highPoint={highPoint} drawdown={drawdown}
             chartData={chartData} goal={goal} totalInvested={totalInvested}
             holdings={holdingsWithShares}
-            dailyRecords={dailyRecords} setDailyRecords={setDailyRecords}
+            onFillDailyTw={(value) => { setDailyPrefill({ twValue: value, nonce: Date.now() }); setTab("daily"); }}
           />
         )}
         {tab === "daily" && (
-          <DailyPanel records={sortedDaily} setRecords={setDailyRecords} />
+          <DailyPanel records={sortedDaily} setRecords={setDailyRecords} prefill={dailyPrefill} />
         )}
         {tab === "holdings" && (
           <HoldingsPanel holdings={holdingsWithShares} setHoldings={setHoldings} />
@@ -662,7 +667,7 @@ function Header({ goal, totalToday, goalDate }) {
 }
 
 // ---------------- Live Price Panel (dashboard) ----------------
-function LivePricePanel({ holdings, dailyRecords, setDailyRecords }) {
+function LivePricePanel({ holdings, onFillDailyTw }) {
   const [live, setLive] = useState({});      // symbol -> { price, prevClose, isUS, asOfDate, isStale }
   const [liveStatus, setLiveStatus] = useState("idle"); // idle | loading | done | error
   const [liveAt, setLiveAt] = useState(null);
@@ -789,20 +794,9 @@ function LivePricePanel({ holdings, dailyRecords, setDailyRecords }) {
   const hasLive = rows.length > 0;
   const staleOne = Object.values(live).find((l) => l.isStale && l.asOfDate);
 
-  const [recordedNote, setRecordedNote] = useState(null);
   const recordToday = () => {
-    if (!setDailyRecords) return;
-    const today = todayStr();
-    const rounded = Math.round(totalValue);
-    const existing = (dailyRecords || []).some((r) => r.date === today);
-    if (existing) {
-      setDailyRecords(dailyRecords.map((r) => (r.date === today ? { ...r, twValue: rounded } : r)));
-      setRecordedNote("已更新今日紀錄");
-    } else {
-      setDailyRecords([...(dailyRecords || []), { id: uid(), date: today, twValue: rounded, usValue: 0, twCost: 0, usCost: 0 }]);
-      setRecordedNote("已新增今日紀錄");
-    }
-    setTimeout(() => setRecordedNote(null), 2500);
+    if (!onFillDailyTw) return;
+    onFillDailyTw(Math.round(totalValue));
   };
 
   return (
@@ -851,19 +845,16 @@ function LivePricePanel({ holdings, dailyRecords, setDailyRecords }) {
             <span style={{ color: COLORS.sub }}>全部股票總市值</span>
             <span style={{ color: COLORS.gold }}>NT$ {nf(totalValue)}</span>
           </div>
-          {setDailyRecords && (
+          {onFillDailyTw && (
             <>
               <button onClick={recordToday}
                 className="mt-2 w-full rounded-lg py-2 text-[11px] font-bold"
                 style={{ background: COLORS.bg, border: `1px solid ${COLORS.gold}`, color: COLORS.gold }}>
-                記錄為今日資產
+                帶入「每日紀錄」台股市值
               </button>
               <div className="text-[10px] mt-1" style={{ color: COLORS.sub }}>
-                只會寫入 0050、0056、2330 這三檔市值，若還有其他資產記得手動加總調整
+                會跳到「每日紀錄」並自動填好台股市值，美股記得手動補上再儲存
               </div>
-              {recordedNote && (
-                <div className="text-[11px] mt-1 font-bold" style={{ color: COLORS.gold }}>{recordedNote}</div>
-              )}
             </>
           )}
         </div>
@@ -881,7 +872,7 @@ function LivePricePanel({ holdings, dailyRecords, setDailyRecords }) {
 // ---------------- Dashboard ----------------
 function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, totalDividends,
   totalReturn, totalReturnPct, highPoint, drawdown, chartData, goal, totalInvested, holdings,
-  dailyRecords, setDailyRecords }) {
+  onFillDailyTw }) {
   const up = dailyChange >= 0;
   return (
     <div className="space-y-4">
@@ -898,7 +889,7 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
         </div>
       </div>
 
-      <LivePricePanel holdings={holdings} dailyRecords={dailyRecords} setDailyRecords={setDailyRecords} />
+      <LivePricePanel holdings={holdings} onFillDailyTw={onFillDailyTw} />
 
       {chartData.length > 1 && (
         <div className="rounded-2xl p-4" style={{
@@ -965,8 +956,15 @@ function StatCard({ label, value, tone }) {
 }
 
 // ---------------- Daily Panel ----------------
-function DailyPanel({ records, setRecords }) {
+function DailyPanel({ records, setRecords, prefill }) {
   const [form, setForm] = useState({ date: todayStr(), twValue: "", usValue: "", twCost: "", usCost: "" });
+  // When "帶入「每日紀錄」台股市值" is pressed on the dashboard, prefill
+  // is set to a fresh object each time — that reference change is what
+  // makes this effect fire again even if the same value is sent twice.
+  useEffect(() => {
+    if (!prefill) return;
+    setForm((f) => ({ ...f, date: todayStr(), twValue: String(prefill.twValue) }));
+  }, [prefill]);
   const add = () => {
     if (!form.twValue && !form.usValue) return;
     setRecords((r) => {
