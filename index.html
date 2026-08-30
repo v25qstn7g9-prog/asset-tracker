@@ -172,6 +172,18 @@ function buildSchedule({ startDate, initialCapital, monthlyAmount, annualReturn,
   return rows;
 }
 // find the first schedule index whose `key` value reaches `target`, with linear interpolation
+// Whether it's currently within TWSE trading hours (weekdays 09:00–13:30,
+// using the device's local time — fine since this app is used in Taiwan).
+// Only checks weekday + time window; it doesn't know about public holidays,
+// so a market holiday will still count as "open" here and the auto-refresh
+// will fire a few extra times that day — harmless, just not perfectly precise.
+function isTwseTradingHours(date = new Date()) {
+  const day = date.getDay(); // 0 = Sunday, 6 = Saturday
+  if (day === 0 || day === 6) return false;
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  return minutes >= 9 * 60 && minutes <= 13 * 60 + 30;
+}
+
 function findCrossing(schedule, key, target) {
   if (!schedule.length) return null;
   if (target <= schedule[0][key]) return { index: 0 };
@@ -835,18 +847,23 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     isFetchingRef.current = false;
   };
 
-  // Auto-refresh when the panel is ready, then every 60 seconds. If we just
-  // loaded a cache that's still fresh (e.g. you switched tabs and back
-  // within a minute), skip the immediate refetch and just let the interval
-  // pick up from there — otherwise re-entering this tab repeatedly would
-  // hammer the free price sources far more than the 60s cadence intends.
-  // The effect keys off activeSymbolsKey (not the array itself) so it
-  // resets the interval when holdings actually change, not on every render.
+  // Auto-refresh when the panel is ready, then every 60 seconds — but only
+  // during TWSE trading hours. Outside those hours the price wouldn't be
+  // changing anyway, so this avoids hammering the free price sources for
+  // nothing all evening/overnight/weekends. The manual "抓取即時股價" button
+  // is unaffected by this — you can still press it any time to check the
+  // last close. If we just loaded a cache that's still fresh (e.g. you
+  // switched tabs and back within a minute), skip the immediate refetch and
+  // just let the interval pick up from there. The effect keys off
+  // activeSymbolsKey (not the array itself) so it resets the interval when
+  // holdings actually change, not on every render.
   useEffect(() => {
     if (!cacheLoaded || !activeSymbolsKey) return;
     const isFresh = Date.now() - lastFetchAtRef.current < 55000;
-    if (!isFresh) fetchAllLive();
-    const timer = setInterval(fetchAllLive, 60000);
+    if (!isFresh && isTwseTradingHours()) fetchAllLive();
+    const timer = setInterval(() => {
+      if (isTwseTradingHours()) fetchAllLive();
+    }, 60000);
     return () => clearInterval(timer);
   }, [cacheLoaded, activeSymbolsKey]);
 
@@ -872,7 +889,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     <Panel title="即時股價">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[11px]" style={{ color: COLORS.sub }}>
-          {liveStatus === "idle" && "固定抓取 0050、0056、2330（每 60 秒自動更新）"}
+          {liveStatus === "idle" && "固定抓取 0050、0056、2330（開盤時間每 60 秒自動更新）"}
           {liveStatus === "loading" && "更新中…"}
           {liveStatus === "done" && liveAt && (staleOne
             ? `休市中，顯示 ${staleOne.asOfDate.getFullYear()}/${String(staleOne.asOfDate.getMonth()+1).padStart(2,"0")}/${String(staleOne.asOfDate.getDate()).padStart(2,"0")} 收盤價（查詢 ${liveAt.toLocaleTimeString("zh-TW", { hour12: false })}）`
