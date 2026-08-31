@@ -1061,6 +1061,29 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         <AddButton onClick={add} label="儲存紀錄" />
       </Panel>
 
+      {monthKeys.length > 0 && (
+        <Panel title="月度損益">
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {[...monthKeys].reverse().map((mk) => {
+              const stat = monthlyStats[mk];
+              return (
+                <div key={mk} className="flex justify-between items-baseline text-xs mono rounded-lg px-3 py-2"
+                  style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                  <span style={{ color: COLORS.sub }}>{mk}</span>
+                  {stat ? (
+                    <span className="font-bold" style={{ color: stat.change >= 0 ? COLORS.gain : COLORS.loss }}>
+                      {stat.change >= 0 ? "+" : ""}{nf(stat.change)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                    </span>
+                  ) : (
+                    <span style={{ color: COLORS.sub }}>最早紀錄，無前月可比較</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+
       <Panel title={`歷史紀錄（${records.length}）`}>
         <div className="space-y-2 max-h-[30rem] overflow-y-auto">
           {(() => {
