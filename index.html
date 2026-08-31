@@ -873,8 +873,14 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     // temporary proxy/API hiccups instead of making that holding disappear.
     const mergedMap = {};
     targets.forEach((h) => {
-      if (quotes && quotes[h.symbol]) mergedMap[h.symbol] = quotes[h.symbol];
-      else if (liveRef.current[h.symbol]) mergedMap[h.symbol] = liveRef.current[h.symbol];
+      if (quotes && quotes[h.symbol]) {
+        // Stamp with "now" only for a genuinely fresh fetch this round.
+        mergedMap[h.symbol] = { ...quotes[h.symbol], fetchedAt: now.toISOString() };
+      } else if (liveRef.current[h.symbol]) {
+        // Carry over the old entry as-is, fetchedAt included — so the UI
+        // can tell "this is what we showed last time" from "this just came in".
+        mergedMap[h.symbol] = liveRef.current[h.symbol];
+      }
     });
     liveRef.current = mergedMap;
     setLive(mergedMap);
@@ -915,7 +921,8 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     const chg = l.price - l.prevClose;
     const chgPct = l.prevClose ? (chg / l.prevClose) * 100 : 0;
     const value = l.price * h.current;
-    return { ...h, price: l.price, chg, chgPct, value, isUS: l.isUS };
+    const isFromCache = failedSymbols.includes(h.symbol);
+    return { ...h, price: l.price, chg, chgPct, value, isUS: l.isUS, fetchedAt: l.fetchedAt, isFromCache };
   }).filter(Boolean);
 
   const totalValue = rows.reduce((s, r) => s + r.value, 0);
@@ -959,13 +966,22 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
           </div>
           <div className="space-y-1.5 max-h-64 overflow-y-auto">
             {rows.map((r) => (
-              <div key={r.id} className="grid grid-cols-4 gap-1 text-xs mono items-center">
-                <span style={{ color: COLORS.sub }}>{r.symbol}</span>
-                <span className="text-right">{r.price.toFixed(2)}</span>
-                <span className="text-right" style={{ color: r.chg >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {r.chg >= 0 ? "▲" : "▼"} {r.chgPct >= 0 ? "+" : ""}{r.chgPct.toFixed(2)}%
-                </span>
-                <span className="text-right font-bold">{nf(r.value)}</span>
+              <div key={r.id}>
+                <div className="grid grid-cols-4 gap-1 text-xs mono items-center">
+                  <span style={{ color: COLORS.sub }}>{r.symbol}</span>
+                  <span className="text-right">{r.price.toFixed(2)}</span>
+                  <span className="text-right" style={{ color: r.chg >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {r.chg >= 0 ? "▲" : "▼"} {r.chgPct >= 0 ? "+" : ""}{r.chgPct.toFixed(2)}%
+                  </span>
+                  <span className="text-right font-bold">{nf(r.value)}</span>
+                </div>
+                {r.isFromCache && r.fetchedAt && (
+                  <div className="text-[9px] text-right mt-0.5" style={{ color: COLORS.sub }}>
+                    這次抓取失敗，顯示上次成功價格（{new Date(r.fetchedAt).toLocaleString("zh-TW", {
+                      month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+                    })}）
+                  </div>
+                )}
               </div>
             ))}
           </div>
