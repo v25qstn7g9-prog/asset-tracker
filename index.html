@@ -1040,10 +1040,24 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
     // (which would count new contributions as if they were investment
     // gains). Contribution is the month's own number: how much your cost
     // basis grew, i.e. how much new money went in.
-    const marketReturn = (endValue - endCost) - (startValue - startCost);
-    const pct = startValue ? (marketReturn / startValue) * 100 : 0;
-    const contribution = endCost - startCost;
-    monthlyStats[mk] = { marketReturn, pct, contribution };
+    // This only works if BOTH ends of the month have real cost data. If
+    // cost tracking started partway through your history, one side will
+    // read as 0 (not "genuinely zero cost", just "not filled in yet") —
+    // using it anyway would misread that as a huge fake gain/loss for
+    // whichever month straddles that transition. Fall back to the plain
+    // value-based estimate for exactly that month instead.
+    const hasCostBothEnds = startCost > 0 && endCost > 0;
+    let marketReturn, pct, contribution;
+    if (hasCostBothEnds) {
+      marketReturn = (endValue - endCost) - (startValue - startCost);
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = endCost - startCost;
+    } else {
+      marketReturn = endValue - startValue;
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = null; // unknown split between market move and new money
+    }
+    monthlyStats[mk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
   });
 
   return (
@@ -1088,9 +1102,14 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                       <span style={{ color: COLORS.sub }}>最早紀錄，無前月可比較</span>
                     )}
                   </div>
-                  {stat && stat.contribution !== 0 && (
+                  {stat && stat.contribution != null && stat.contribution !== 0 && (
                     <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
                       新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                    </div>
+                  )}
+                  {stat && stat.approximate && (
+                    <div className="text-right mt-0.5" style={{ color: COLORS.sub }}>
+                      成本資料不完整，此為粗估（含新增投入）
                     </div>
                   )}
                 </div>
@@ -1128,9 +1147,14 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                           <span style={{ color: COLORS.sub, fontWeight: "normal" }}>最早紀錄，無前月可比較</span>
                         )}
                       </div>
-                      {stat && stat.contribution !== 0 && (
+                      {stat && stat.contribution != null && stat.contribution !== 0 && (
                         <div className="text-right font-normal" style={{ color: COLORS.gold }}>
                           新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                        </div>
+                      )}
+                      {stat && stat.approximate && (
+                        <div className="text-right font-normal" style={{ color: COLORS.sub }}>
+                          成本資料不完整，此為粗估（含新增投入）
                         </div>
                       )}
                     </div>
