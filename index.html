@@ -625,7 +625,7 @@ function AssetTracker() {
           />
         )}
         {tab === "dividends" && (
-          <DividendsPanel dividends={dividends} setDividends={setDividends} holdings={holdings} />
+          <DividendsPanel dividends={dividends} setDividends={setDividends} holdings={holdingsWithShares} />
         )}
         {tab === "plan" && (
           <PlanPanel planItems={planItems} setPlanItems={setPlanItems}
@@ -1296,6 +1296,18 @@ function TradesPanel({ trades, setTrades, holdings, costBasis, setCostBasis, acc
 // ---------------- Dividends Panel ----------------
 function DividendsPanel({ dividends, setDividends, holdings }) {
   const [form, setForm] = useState({ date: todayStr(), symbol: "", shares: "", perShare: "" });
+  // Typing/selecting a symbol that matches a holding auto-fills 股數 with
+  // that holding's current share count, so you don't have to look it up
+  // and retype it every time — still a normal editable field afterward if
+  // the actual ex-dividend-date share count was different.
+  const handleSymbolChange = (value) => {
+    const match = holdings.find((h) => h.symbol === value);
+    setForm((f) => ({
+      ...f,
+      symbol: value,
+      shares: match ? String(match.current) : f.shares,
+    }));
+  };
   const add = () => {
     if (!form.symbol || !form.shares || !form.perShare) return;
     const amount = Number(form.shares) * Number(form.perShare);
@@ -1316,11 +1328,11 @@ function DividendsPanel({ dividends, setDividends, holdings }) {
           <Field label="除息日"><input type="date" value={form.date}
             onChange={(e) => setForm({ ...form, date: e.target.value })} className="input" /></Field>
           <Field label="代號">
-            <input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })}
+            <input value={form.symbol} onChange={(e) => handleSymbolChange(e.target.value)}
               placeholder="0056" list="symbols2" className="input" />
             <datalist id="symbols2">{holdings.map((h) => <option key={h.id} value={h.symbol} />)}</datalist>
           </Field>
-          <Field label="股數"><input type="number" value={form.shares}
+          <Field label="股數（選了有持股的代號會自動帶入，可再手動調整）"><input type="number" value={form.shares}
             onChange={(e) => setForm({ ...form, shares: e.target.value })} className="input" /></Field>
           <Field label="每股配息"><input type="number" step="0.01" value={form.perShare}
             onChange={(e) => setForm({ ...form, perShare: e.target.value })} className="input" /></Field>
