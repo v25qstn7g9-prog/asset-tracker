@@ -1015,6 +1015,28 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   const remove = (id) => setRecords((r) => r.filter((x) => x.id !== id));
   const reversed = [...records].reverse();
 
+  // Monthly summary: for each month, compare the last record of that month
+  // against the last record before it (i.e. the prior month's closing
+  // value) to get that month's gain/loss and return %. The very first
+  // month in the whole history has no "before" record to compare against,
+  // so it's left blank rather than showing a misleading 0%/100%.
+  const monthlyStats = {};
+  const monthKey = (d) => d.slice(0, 7); // "YYYY-MM"
+  let lastSeenPerMonth = {};
+  records.forEach((r) => { lastSeenPerMonth[monthKey(r.date)] = r; });
+  const monthKeys = Object.keys(lastSeenPerMonth).sort();
+  monthKeys.forEach((mk, i) => {
+    const endRec = lastSeenPerMonth[mk];
+    const end = endRec.twValue + endRec.usValue;
+    const prevMk = i > 0 ? monthKeys[i - 1] : null;
+    if (!prevMk) { monthlyStats[mk] = null; return; }
+    const startRec = lastSeenPerMonth[prevMk];
+    const start = startRec.twValue + startRec.usValue;
+    const change = end - start;
+    const pct = start ? (change / start) * 100 : 0;
+    monthlyStats[mk] = { change, pct };
+  });
+
   return (
     <div className="space-y-4">
       <Panel title="新增每日紀錄">
@@ -1040,41 +1062,63 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
       </Panel>
 
       <Panel title={`歷史紀錄（${records.length}）`}>
-        <div className="space-y-2 max-h-96 overflow-y-auto">
-          {reversed.map((r, i) => {
-            const total = r.twValue + r.usValue;
-            const totalCost = (r.twCost || 0) + (r.usCost || 0);
-            const prevRec = records[records.length - 2 - i];
-            const diff = prevRec ? total - (prevRec.twValue + prevRec.usValue) : null;
-            return (
-              <Row key={r.id} onDelete={() => remove(r.id)}>
-                <div className="flex-1">
-                  <div className="text-sm mono">{r.date}</div>
-                  <div className="text-[11px]" style={{ color: COLORS.sub }}>
-                    台 {nf(r.twValue)} ／ 美 {nf(r.usValue)}
-                  </div>
-                  {totalCost > 0 && (
-                    <div className="text-[11px] mono" style={{ color: COLORS.sub }}>
-                      成本 台 {nf(r.twCost)} ／ 美 {nf(r.usCost)}
+        <div className="space-y-2 max-h-[30rem] overflow-y-auto">
+          {(() => {
+            let lastMonth = null;
+            return reversed.map((r, i) => {
+              const total = r.twValue + r.usValue;
+              const totalCost = (r.twCost || 0) + (r.usCost || 0);
+              const prevRec = records[records.length - 2 - i];
+              const diff = prevRec ? total - (prevRec.twValue + prevRec.usValue) : null;
+              const mk = monthKey(r.date);
+              const showHeader = mk !== lastMonth;
+              lastMonth = mk;
+              const stat = monthlyStats[mk];
+              return (
+                <div key={r.id}>
+                  {showHeader && (
+                    <div className="flex justify-between items-baseline pt-3 pb-1.5 text-[11px] font-bold mono"
+                      style={{ color: COLORS.gold, borderTop: i > 0 ? `1px solid ${COLORS.panelBorder}` : "none", marginTop: i > 0 ? "0.25rem" : 0 }}>
+                      <span>{mk}</span>
+                      {stat ? (
+                        <span style={{ color: stat.change >= 0 ? COLORS.gain : COLORS.loss }}>
+                          {stat.change >= 0 ? "+" : ""}{nf(stat.change)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                        </span>
+                      ) : (
+                        <span style={{ color: COLORS.sub, fontWeight: "normal" }}>最早紀錄，無前月可比較</span>
+                      )}
                     </div>
                   )}
+                  <Row onDelete={() => remove(r.id)}>
+                    <div className="flex-1">
+                      <div className="text-sm mono">{r.date}</div>
+                      <div className="text-[11px]" style={{ color: COLORS.sub }}>
+                        台 {nf(r.twValue)} ／ 美 {nf(r.usValue)}
+                      </div>
+                      {totalCost > 0 && (
+                        <div className="text-[11px] mono" style={{ color: COLORS.sub }}>
+                          成本 台 {nf(r.twCost)} ／ 美 {nf(r.usCost)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <div className="mono text-sm font-bold">{nf(total)}</div>
+                      {diff != null && (
+                        <div className="text-[11px] mono" style={{ color: diff >= 0 ? COLORS.gain : COLORS.loss }}>
+                          {diff >= 0 ? "+" : ""}{nf(diff)}
+                        </div>
+                      )}
+                      {totalCost > 0 && (
+                        <div className="text-[11px] mono" style={{ color: (total - totalCost) >= 0 ? COLORS.gain : COLORS.loss }}>
+                          損益 {(total - totalCost) >= 0 ? "+" : ""}{nf(total - totalCost)}
+                        </div>
+                      )}
+                    </div>
+                  </Row>
                 </div>
-                <div className="text-right">
-                  <div className="mono text-sm font-bold">{nf(total)}</div>
-                  {diff != null && (
-                    <div className="text-[11px] mono" style={{ color: diff >= 0 ? COLORS.gain : COLORS.loss }}>
-                      {diff >= 0 ? "+" : ""}{nf(diff)}
-                    </div>
-                  )}
-                  {totalCost > 0 && (
-                    <div className="text-[11px] mono" style={{ color: (total - totalCost) >= 0 ? COLORS.gain : COLORS.loss }}>
-                      損益 {(total - totalCost) >= 0 ? "+" : ""}{nf(total - totalCost)}
-                    </div>
-                  )}
-                </div>
-              </Row>
-            );
-          })}
+              );
+            });
+          })()}
           {records.length === 0 && <Empty text="尚無紀錄，新增第一筆吧" />}
         </div>
       </Panel>
