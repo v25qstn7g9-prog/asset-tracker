@@ -780,23 +780,24 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     isFetchingRef.current = false;
   };
 
-  // Auto-refresh when the panel is ready, then every 60 seconds — but only
+  // Auto-refresh when the panel is ready, then every 15 seconds — but only
   // during TWSE trading hours. Outside those hours the price wouldn't be
-  // changing anyway, so this avoids hammering the free price sources for
-  // nothing all evening/overnight/weekends. The manual "抓取即時股價" button
-  // is unaffected by this — you can still press it any time to check the
-  // last close. If we just loaded a cache that's still fresh (e.g. you
-  // switched tabs and back within a minute), skip the immediate refetch and
-  // just let the interval pick up from there. The effect keys off
-  // activeSymbolsKey (not the array itself) so it resets the interval when
-  // holdings actually change, not on every render.
+  // changing anyway, so this avoids hitting the price source for nothing
+  // all evening/overnight/weekends — it falls back to fully manual then.
+  // The manual "抓取即時股價" button is unaffected by this — you can still
+  // press it any time to check the last close. If we just loaded a cache
+  // that's still fresh (e.g. you switched tabs and back within a few
+  // seconds), skip the immediate refetch and just let the interval pick up
+  // from there. The effect keys off activeSymbolsKey (not the array itself)
+  // so it resets the interval when holdings actually change, not on every
+  // render.
   useEffect(() => {
     if (!cacheLoaded || !activeSymbolsKey) return;
-    const isFresh = Date.now() - lastFetchAtRef.current < 55000;
+    const isFresh = Date.now() - lastFetchAtRef.current < 12000;
     if (!isFresh && isTwseTradingHours()) fetchAllLive();
     const timer = setInterval(() => {
       if (isTwseTradingHours()) fetchAllLive();
-    }, 60000);
+    }, 15000);
     return () => clearInterval(timer);
   }, [cacheLoaded, activeSymbolsKey]);
 
@@ -823,7 +824,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     <Panel title="即時股價">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[11px]" style={{ color: COLORS.sub }}>
-          {liveStatus === "idle" && `自動抓取目前持有的 ${activeHoldings.length} 檔台股（開盤時間每 60 秒更新）`}
+          {liveStatus === "idle" && `自動抓取目前持有的 ${activeHoldings.length} 檔台股（開盤時間每 15 秒更新，收盤後改手動）`}
           {liveStatus === "loading" && "更新中…"}
           {liveStatus === "done" && liveAt && (staleOne
             ? `休市中，顯示 ${staleOne.asOfDate.getFullYear()}/${String(staleOne.asOfDate.getMonth()+1).padStart(2,"0")}/${String(staleOne.asOfDate.getDate()).padStart(2,"0")} 收盤價（查詢 ${liveAt.toLocaleTimeString("zh-TW", { hour12: false })}）`
