@@ -1,4 +1,15 @@
-const ALLOWED_SYMBOLS = new Set(["0050", "0056", "2330"]);
+// Was a fixed Set of exactly 3 symbols — now a format check instead, since
+// the front end sends whatever's currently held (see LIVE_WATCHLIST removal
+// in index.html), not a hardcoded list. This still blocks obviously-invalid
+// input (e.g. someone probing the endpoint with garbage), just without
+// needing to hand-edit this list every time the front end's holdings change.
+// Matches Taiwan listed/OTC ticker shapes: 4-6 digits, optional trailing
+// letter (covers plain stocks like 2330, ETFs like 0050/006208, and
+// lettered ETF codes like 00981A / 00685L).
+const SYMBOL_PATTERN = /^[0-9]{4,6}[A-Z]?$/;
+function isAllowedSymbol(s) {
+  return SYMBOL_PATTERN.test(s);
+}
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -97,7 +108,7 @@ export async function onRequestGet(context) {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const symbols = [...new Set(requested)].filter((s) => ALLOWED_SYMBOLS.has(s));
+    const symbols = [...new Set(requested)].filter(isAllowedSymbol);
     if (!symbols.length) return jsonResponse({ error: "沒有允許的股票代號" }, 400);
 
     const quotes = {};
