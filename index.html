@@ -79,6 +79,7 @@ const Target = LR.Target || FallbackIcon;
 const Download = LR.Download || FallbackIcon;
 const Upload = LR.Upload || FallbackIcon;
 const ShieldCheck = LR.ShieldCheck || FallbackIcon;
+const Pencil = LR.Pencil || FallbackIcon;
 
 // ---------- constants ----------
 const APP_VERSION = "4.6-personal";
@@ -198,19 +199,6 @@ function findCrossing(schedule, key, target) {
 }
 
 // ---------- live price helpers (from 存股監控) ----------
-// Plain fetch() has no timeout of its own — if a proxy hangs instead of
-// failing outright, the browser will wait on it indefinitely (or until its
-// own very long internal timeout), which is what made refreshes feel like
-// they'd stalled. This aborts and moves on after `ms` instead.
-async function fetchWithTimeout(url, options = {}, ms = 5000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 // A single free CORS proxy (e.g. allorigins.win) will occasionally rate-limit
 // or briefly go down under repeated calls from the same browser session —
 // trying a short list of independent proxies in order means one being flaky
@@ -241,7 +229,7 @@ async function fetchLiveQuotesBatch(symbols) {
 
   try {
     // Try a direct request first (works in some environments / extensions).
-    const res = await fetchWithTimeout(targetUrl, { cache: "no-store" }, 3000);
+    const res = await fetch(targetUrl, { cache: "no-store" });
     if (res.ok) json = await res.json();
   } catch (e) {
     // Expected to fail in most browsers — TWSE's MIS endpoint doesn't send
@@ -252,7 +240,7 @@ async function fetchLiveQuotesBatch(symbols) {
   if (!json || !Array.isArray(json.msgArray)) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
-        const res2 = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: "no-store" });
+        const res2 = await fetch(buildProxyUrl(targetUrl), { cache: "no-store" });
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
         if (parsed && Array.isArray(parsed.msgArray)) { json = parsed; break; }
@@ -290,7 +278,7 @@ async function fetchYahooQuote(symbol) {
   let json = null;
   let lastErr = null;
   try {
-    const res = await fetchWithTimeout(targetUrl, { cache: "no-store" }, 3000);
+    const res = await fetch(targetUrl, { cache: "no-store" });
     if (res.ok) json = await res.json();
   } catch (e) {
     lastErr = e;
@@ -298,7 +286,7 @@ async function fetchYahooQuote(symbol) {
   if (!json) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
-        const res2 = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: "no-store" });
+        const res2 = await fetch(buildProxyUrl(targetUrl), { cache: "no-store" });
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
         if (parsed) { json = parsed; break; }
@@ -327,18 +315,24 @@ async function fetchYahooQuote(symbol) {
 }
 
 async function fetchQuotesWithFallback(symbols) {
-  // Unified on TWSE only — no Yahoo, no time-of-day branching. Known
-  // limitation, accepted deliberately: this free endpoint tends to just
-  // echo yesterday's close during market hours (it appears to need a
-  // browser session/cookie for a genuine intraday tick, which we can't
-  // establish through a stateless CORS proxy). Outside market hours this
-  // isn't a limitation at all — the official closing price is exactly
-  // what you want then.
-  // NOTE: only "tse_" (上市/TWSE) symbols are queried right now, since
-  // the current watchlist (0050/0056/2330) is all TWSE-listed. If an
-  // 上櫃 (OTC, 櫃買中心) symbol is ever added to the watchlist, this needs
-  // an "otc_" prefix added for that symbol specifically.
-  return await fetchLiveQuotesBatch(symbols);
+  try {
+    return await fetchLiveQuotesBatch(symbols);
+  } catch (e) {
+    // TWSE batch call failed entirely — try Yahoo Finance per-symbol as an
+    // independent second source rather than giving up right away.
+    const out = {};
+    for (const s of symbols) {
+      try {
+        const r = await fetchYahooQuote(s);
+        out[s] = r;
+      } catch (e2) {
+        // leave this symbol out of the result; fetchAllLive's merge logic
+        // will fall back to the last cached price for it, if any.
+      }
+    }
+    if (Object.keys(out).length === 0) throw e;
+    return out;
+  }
 }
 
 
@@ -1147,30 +1141,64 @@ function DailyPanel({ records, setRecords, prefill }) {
 // ---------------- Holdings Panel ----------------
 function HoldingsPanel({ holdings, setHoldings }) {
   const [form, setForm] = useState({ symbol: "", name: "", initialShares: "", target2035: "" });
-  const add = () => {
-    if (!form.symbol) return;
-    setHoldings((h) => [...h, {
-      id: uid(), symbol: form.symbol, name: form.name,
-      initialShares: Number(form.initialShares || 0), target2035: Number(form.target2035 || 0),
-    }]);
+  // When set, the form below is editing this existing holding's id instead
+  // of creating a new one — clicking the pencil on a row populates the form
+  // and switches the submit button into "儲存變更" mode.
+  const [editingId, setEditingId] = useState(null);
+
+  const startEdit = (h) => {
+    setEditingId(h.id);
+    setForm({
+      symbol: h.symbol,
+      name: h.name,
+      initialShares: String(h.initialShares ?? ""),
+      target2035: String(h.target2035 ?? ""),
+    });
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
     setForm({ symbol: "", name: "", initialShares: "", target2035: "" });
   };
-  const remove = (id) => setHoldings((h) => h.filter((x) => x.id !== id));
+  const submit = () => {
+    if (!form.symbol) return;
+    if (editingId) {
+      setHoldings((h) => h.map((x) => x.id === editingId ? {
+        ...x, symbol: form.symbol, name: form.name,
+        initialShares: Number(form.initialShares || 0), target2035: Number(form.target2035 || 0),
+      } : x));
+    } else {
+      setHoldings((h) => [...h, {
+        id: uid(), symbol: form.symbol, name: form.name,
+        initialShares: Number(form.initialShares || 0), target2035: Number(form.target2035 || 0),
+      }]);
+    }
+    setEditingId(null);
+    setForm({ symbol: "", name: "", initialShares: "", target2035: "" });
+  };
+  const remove = (id) => {
+    setHoldings((h) => h.filter((x) => x.id !== id));
+    if (editingId === id) cancelEdit();
+  };
 
   return (
     <div className="space-y-4">
       <Panel title="持股進度">
         <div className="space-y-3">
           {holdings.map((h) => (
-            <div key={h.id} className="rounded-xl p-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+            <div key={h.id} className="rounded-xl p-3" style={{ background: COLORS.bg, border: `1px solid ${editingId === h.id ? COLORS.gold : COLORS.panelBorder}` }}>
               <div className="flex justify-between items-start">
                 <div>
                   <div className="font-bold mono">{h.symbol}</div>
                   <div className="text-[11px]" style={{ color: COLORS.sub }}>{h.name}</div>
                 </div>
-                <button onClick={() => remove(h.id)} style={{ color: COLORS.sub }}>
-                  <Trash2 size={15} />
-                </button>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => startEdit(h)} style={{ color: COLORS.sub }}>
+                    <Pencil size={14} />
+                  </button>
+                  <button onClick={() => remove(h.id)} style={{ color: COLORS.sub }}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
               </div>
               <div className="flex justify-between text-xs mono mt-2">
                 <span style={{ color: COLORS.sub }}>目前 {nf(h.current)} 股</span>
@@ -1188,7 +1216,7 @@ function HoldingsPanel({ holdings, setHoldings }) {
         </div>
       </Panel>
 
-      <Panel title="新增持股標的">
+      <Panel title={editingId ? "編輯持股標的" : "新增持股標的"}>
         <div className="grid grid-cols-2 gap-2">
           <Field label="代號"><input value={form.symbol}
             onChange={(e) => setForm({ ...form, symbol: e.target.value })}
@@ -1203,7 +1231,12 @@ function HoldingsPanel({ holdings, setHoldings }) {
             onChange={(e) => setForm({ ...form, target2035: e.target.value })}
             placeholder="0" className="input" /></Field>
         </div>
-        <AddButton onClick={add} label="新增標的" />
+        <AddButton onClick={submit} label={editingId ? "儲存變更" : "新增標的"} />
+        {editingId && (
+          <button onClick={cancelEdit} className="mt-2 w-full text-center text-xs py-1" style={{ color: COLORS.sub }}>
+            取消編輯
+          </button>
+        )}
       </Panel>
     </div>
   );
