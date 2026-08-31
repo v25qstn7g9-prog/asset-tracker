@@ -373,6 +373,12 @@ function AssetTracker() {
   // on the dashboard — carries the fetched TW market value over to the
   // 每日紀錄 form so the user can add the US-side value and confirm together.
   const [dailyPrefill, setDailyPrefill] = useState(null);
+  // Lifted out of DailyPanel itself: that panel only renders while
+  // tab === "daily", so a useState inside it gets wiped every time you
+  // switch away and back (e.g. going to 總覽 to fill market value, then to
+  // 交易紀錄 to fill cost — each visit was resetting whatever the other one
+  // had just filled in). Owning it here means it survives tab switches.
+  const [dailyForm, setDailyForm] = useState({ date: todayStr(), twValue: "", usValue: "", twCost: "", usCost: "" });
 
   const [dailyRecords, setDailyRecords] = useState([]);
   const [holdings, setHoldings] = useState([]);
@@ -606,7 +612,8 @@ function AssetTracker() {
           />
         )}
         {tab === "daily" && (
-          <DailyPanel records={sortedDaily} setRecords={setDailyRecords} prefill={dailyPrefill} />
+          <DailyPanel records={sortedDaily} setRecords={setDailyRecords} prefill={dailyPrefill}
+            form={dailyForm} setForm={setDailyForm} />
         )}
         {tab === "holdings" && (
           <HoldingsPanel holdings={holdingsWithShares} setHoldings={setHoldings} />
@@ -978,8 +985,7 @@ function StatCard({ label, value, tone }) {
 }
 
 // ---------------- Daily Panel ----------------
-function DailyPanel({ records, setRecords, prefill }) {
-  const [form, setForm] = useState({ date: todayStr(), twValue: "", usValue: "", twCost: "", usCost: "" });
+function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   // When "帶入「每日紀錄」..." is pressed elsewhere in the app, prefill is
   // set to a fresh object each time — that reference change is what makes
   // this effect fire again even if the same value is sent twice. Only the
