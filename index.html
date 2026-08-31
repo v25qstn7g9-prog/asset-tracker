@@ -322,18 +322,15 @@ async function fetchQuotesWithFallback(symbols) {
   // time, which is why prices looked frozen at 0.00% no matter what. Going
   // through a stateless free CORS proxy, we can't reliably establish that
   // session, so Yahoo (which needs no session) goes first instead.
+  // With only 3 symbols in the watchlist, firing all of them at once is a
+  // light enough load that it's not worth trading away the speed for extra
+  // caution — sequential-with-a-stagger only earns its keep at higher counts.
   const out = {};
   let anySuccess = false;
-  for (const s of symbols) {
-    try {
-      const r = await fetchYahooQuote(s);
-      out[s] = r;
-      anySuccess = true;
-    } catch (e) {
-      // leave this one out; the rest still get tried
-    }
-    await new Promise((res) => setTimeout(res, 300));
-  }
+  const settled = await Promise.allSettled(symbols.map((s) => fetchYahooQuote(s)));
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") { out[symbols[i]] = r.value; anySuccess = true; }
+  });
   if (anySuccess) return out;
 
   // Yahoo failed for every symbol — fall back to the TWSE batch endpoint as
