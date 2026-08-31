@@ -314,14 +314,27 @@ async function fetchYahooQuote(symbol) {
 }
 
 async function fetchQuotesWithFallback(symbols) {
-  // Fixed to TWSE only, per explicit request — no fallback to any other
-  // source. Known limitation: this free endpoint appears to require a
-  // browser session/cookie (established by visiting mis.twse.com.tw
-  // directly) to return a genuine same-day tick. Without it, it can
-  // silently keep returning yesterday's close (price == prevClose, 0.00%
-  // change) instead of a live price. That's a limitation of the source
-  // itself when accessed this way — not something retries or cache-busting
-  // can fix — so don't spend time re-diagnosing this as a bug if it recurs.
+  // Trading hours: Yahoo is the only source. TWSE's free endpoint appears
+  // to need a browser session/cookie (from visiting mis.twse.com.tw
+  // directly) to return a genuine intraday tick — without it, it tends to
+  // just echo yesterday's close all day, which is exactly wrong for a
+  // "live" reading during market hours.
+  if (isTwseTradingHours()) {
+    const out = {};
+    let anySuccess = false;
+    const settled = await Promise.allSettled(symbols.map((s) => fetchYahooQuote(s)));
+    settled.forEach((r, i) => {
+      if (r.status === "fulfilled") { out[symbols[i]] = r.value; anySuccess = true; }
+    });
+    if (!anySuccess) throw new Error("Yahoo 全部失敗");
+    return out;
+  }
+
+  // Outside trading hours: use TWSE directly. This is exactly the situation
+  // where its "yesterday's close" behavior is actually the right answer —
+  // the official closing price for the day is what you want once the
+  // market's shut, and it's the exchange's own data rather than a
+  // third-party reseller's.
   return await fetchLiveQuotesBatch(symbols);
 }
 
