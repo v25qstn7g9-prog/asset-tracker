@@ -704,10 +704,10 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     liveRef.current = live;
   }, [live]);
 
-  // Fixed watchlist: always fetch just these three symbols, regardless of
-  // current share count or whatever else is in the holdings list.
-  const LIVE_WATCHLIST = ["0050", "0056", "2330"];
-  const activeHoldings = holdings.filter((h) => LIVE_WATCHLIST.includes(h.symbol));
+  // Watchlist now follows whatever's actually held (current shares > 0),
+  // instead of a fixed list — so adding/selling a position in 持股進度
+  // automatically changes what gets a live quote, no code edit needed.
+  const activeHoldings = holdings.filter((h) => Number(h.current || 0) > 0);
   // Auto-refresh reads this ref instead of closing over `activeHoldings`
   // directly, so an interval set up before you add/remove a holding still
   // fetches the current list instead of the one from when it was created.
@@ -838,7 +838,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     <Panel title="即時股價">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[11px]" style={{ color: COLORS.sub }}>
-          {liveStatus === "idle" && "固定抓取 0050、0056、2330（開盤時間每 60 秒自動更新）"}
+          {liveStatus === "idle" && "依「持股進度」目前有股數的標的抓取（開盤時間每 60 秒自動更新）"}
           {liveStatus === "loading" && "更新中…"}
           {liveStatus === "done" && liveAt && (staleOne
             ? `休市中，顯示 ${staleOne.asOfDate.getFullYear()}/${String(staleOne.asOfDate.getMonth()+1).padStart(2,"0")}/${String(staleOne.asOfDate.getDate()).padStart(2,"0")} 收盤價（查詢 ${liveAt.toLocaleTimeString("zh-TW", { hour12: false })}）`
@@ -908,7 +908,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
           抓取失敗：{failedSymbols.join("、")}（來源暫時壅塞，可再按一次重試）
         </div>
       )}
-      {!activeHoldings.length && <Empty text="請先到「持股進度」新增 0050、0056 或 2330，才能抓取即時股價" />}
+      {!activeHoldings.length && <Empty text="請先到「持股進度」新增持股並填入股數，才能抓取即時股價" />}
     </Panel>
   );
 }
