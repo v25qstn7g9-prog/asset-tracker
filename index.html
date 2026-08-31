@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2";
+const APP_VERSION = "4.6-personal-v2.1";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -218,58 +218,25 @@ function findCrossing(schedule, key, target) {
   return { index: schedule.length - 1, beyond: true };
 }
 
-// ---------- live price helpers (Cloudflare Pages integrated API) ----------
-// V2 architecture: the browser no longer calls TWSE/Yahoo or any public CORS
-// proxy directly. The same Pages project exposes /quote through
-// /functions/quote.js, so the browser makes a same-origin request and the
-// server-side Function handles TWSE + Yahoo fallback.
-async function fetchWithTimeout(url, options = {}, ms = 10000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
+// ---------- live price helpers (Cloudflare Pages Function) ----------
+// The front end sends the symbols that are actually held to the same-origin
+// /quote endpoint. Cloudflare then talks to TWSE/Yahoo server-side, so the
+// browser no longer needs any public CORS proxy.
 async function fetchQuotesWithFallback(symbols) {
-  const qs = encodeURIComponent(symbols.join(","));
-  const res = await fetchWithTimeout(`/quote?symbols=${qs}&_ts=${Date.now()}`, {
-    cache: "no-store",
-    headers: { "Accept": "application/json" },
-  }, 10000);
-
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const err = await res.json();
-      detail = err?.error ? `：${err.error}` : "";
-    } catch (_) {}
-    throw new Error(`報價 API 失敗 HTTP ${res.status}${detail}`);
+  if (!Array.isArray(symbols) || !symbols.length) return {};
+  const unique = [...new Set(symbols.map((s) => String(s).trim().toUpperCase()).filter(Boolean))];
+  const url = `/quote?symbols=${encodeURIComponent(unique.join(","))}&_ts=${Date.now()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error(`報價 API 回傳格式錯誤（HTTP ${res.status}）`);
   }
-
-  const payload = await res.json();
-  if (!payload || typeof payload !== "object" || !payload.quotes) {
-    throw new Error("報價 API 回傳格式錯誤");
+  if (!res.ok || !data?.ok || !data?.quotes) {
+    throw new Error(data?.error || `報價 API 失敗（HTTP ${res.status}）`);
   }
-
-  const out = {};
-  Object.entries(payload.quotes).forEach(([symbol, q]) => {
-    if (!q || !Number.isFinite(Number(q.price))) return;
-    out[symbol] = {
-      symbol,
-      price: Number(q.price),
-      prevClose: Number.isFinite(Number(q.prevClose)) ? Number(q.prevClose) : Number(q.price),
-      isUS: false,
-      asOfDate: q.asOfDate ? new Date(q.asOfDate) : null,
-      isStale: Boolean(q.isStale),
-      source: q.source || payload.source || "server",
-    };
-  });
-
-  if (Object.keys(out).length === 0) throw new Error("所有報價來源皆失敗");
-  return out;
+  return data.quotes;
 }
 
 
@@ -414,11 +381,14 @@ function AssetTracker() {
   const [planItems, setPlanItems] = useState([]);
   const [goal, setGoal] = useState({ targetAmount: 10000000, targetYear: 2035 });
   const [planSchedule, setPlanSchedule] = useState(defaultPlanSchedule());
+  // Starting cost basis, before any trade in the 交易紀錄 log — combined
+  // with the running buy/sell total to get today's accumulated cost.
+  const [costBasis, setCostBasis] = useState({ startingCost: 0 });
 
   // ---- initial load ----
   useEffect(() => {
     (async () => {
-      const [dr, h, t, dv, p, g, ps] = await Promise.all([
+      const [dr, h, t, dv, p, g, ps, cb] = await Promise.all([
         loadKey("dailyRecords", defaultDailyRecords()),
         loadKey("holdings", defaultHoldings()),
         loadKey("trades", defaultTrades()),
@@ -426,6 +396,7 @@ function AssetTracker() {
         loadKey("planItems", defaultPlan()),
         loadKey("goal", { targetAmount: 10000000, targetYear: 2035 }),
         loadKey("planSchedule", defaultPlanSchedule()),
+        loadKey("costBasis", { startingCost: 0 }),
       ]);
       setDailyRecords(dr);
       setHoldings(h);
@@ -434,6 +405,7 @@ function AssetTracker() {
       setPlanItems(p);
       setGoal(g);
       setPlanSchedule(ps);
+      setCostBasis(cb);
       setReady(true);
     })();
   }, []);
@@ -446,6 +418,8 @@ function AssetTracker() {
   useEffect(() => { if (ready) saveKey("planItems", planItems); }, [planItems, ready]);
   useEffect(() => { if (ready) saveKey("goal", goal); }, [goal, ready]);
   useEffect(() => { if (ready) saveKey("planSchedule", planSchedule); }, [planSchedule, ready]);
+  useEffect(() => { if (ready) saveKey("costBasis", costBasis); }, [costBasis, ready]);
+
 
   // ---- full backup / restore ----
   const exportBackup = () => {
@@ -506,6 +480,8 @@ function AssetTracker() {
   const tradesInvested = trades.reduce(
     (s, t) => s + (t.action === "buy" ? t.amount : -t.amount), 0
   );
+  // Running cost basis: starting cost plus every buy (+) / sell (-) since.
+  const accumulatedCost = Number(costBasis.startingCost || 0) + tradesInvested;
   // 目前持倉成本優先取自「每日紀錄」的台股成本+美股成本
   // 沒有填成本欄位時，才退回用交易紀錄淨買入金額估算
   const latestCost = latest ? (latest.twCost || 0) + (latest.usCost || 0) : 0;
@@ -636,7 +612,10 @@ function AssetTracker() {
           <HoldingsPanel holdings={holdingsWithShares} setHoldings={setHoldings} />
         )}
         {tab === "trades" && (
-          <TradesPanel trades={trades} setTrades={setTrades} holdings={holdings} />
+          <TradesPanel trades={trades} setTrades={setTrades} holdings={holdings}
+            costBasis={costBasis} setCostBasis={setCostBasis} accumulatedCost={accumulatedCost}
+            onFillDailyCost={(value) => { setDailyPrefill({ twCost: value, nonce: Date.now() }); setTab("daily"); }}
+          />
         )}
         {tab === "dividends" && (
           <DividendsPanel dividends={dividends} setDividends={setDividends} holdings={holdings} />
@@ -704,10 +683,10 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     liveRef.current = live;
   }, [live]);
 
-  // Watchlist now follows whatever's actually held (current shares > 0),
-  // instead of a fixed list — so adding/selling a position in 持股進度
-  // automatically changes what gets a live quote, no code edit needed.
-  const activeHoldings = holdings.filter((h) => Number(h.current || 0) > 0);
+  // Dynamic watchlist: fetch every Taiwan holding whose current share count
+  // is greater than zero. Add/sell holdings in the app and this list follows
+  // automatically — no symbol needs to be hardcoded here.
+  const activeHoldings = holdings.filter((h) => Number(h.current || 0) > 0 && h.symbol);
   // Auto-refresh reads this ref instead of closing over `activeHoldings`
   // directly, so an interval set up before you add/remove a holding still
   // fetches the current list instead of the one from when it was created.
@@ -747,8 +726,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     const targets = activeRef.current;
     if (!targets.length) return;
     // Guard against overlap: if a previous run (manual or auto) is still
-    // in-flight, skip this tick instead of firing a second, duplicate
-    // request at the same free proxies.
+    // in-flight, skip this tick instead of firing a duplicate API request.
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     setLiveStatus("loading");
@@ -758,7 +736,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
       try {
         quotes = await fetchQuotesWithFallback(symbols);
       } catch (e) {
-        // One retry after a short pause — a single flaky proxy round
+        // One retry after a short pause — a brief TWSE/API hiccup
         // shouldn't fail the whole refresh.
         await new Promise((res) => setTimeout(res, 800));
         quotes = await fetchQuotesWithFallback(symbols);
@@ -838,7 +816,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     <Panel title="即時股價">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[11px]" style={{ color: COLORS.sub }}>
-          {liveStatus === "idle" && "依「持股進度」目前有股數的標的抓取（開盤時間每 60 秒自動更新）"}
+          {liveStatus === "idle" && `自動抓取目前持有的 ${activeHoldings.length} 檔台股（開盤時間每 60 秒更新）`}
           {liveStatus === "loading" && "更新中…"}
           {liveStatus === "done" && liveAt && (staleOne
             ? `休市中，顯示 ${staleOne.asOfDate.getFullYear()}/${String(staleOne.asOfDate.getMonth()+1).padStart(2,"0")}/${String(staleOne.asOfDate.getDate()).padStart(2,"0")} 收盤價（查詢 ${liveAt.toLocaleTimeString("zh-TW", { hour12: false })}）`
@@ -1002,12 +980,19 @@ function StatCard({ label, value, tone }) {
 // ---------------- Daily Panel ----------------
 function DailyPanel({ records, setRecords, prefill }) {
   const [form, setForm] = useState({ date: todayStr(), twValue: "", usValue: "", twCost: "", usCost: "" });
-  // When "帶入「每日紀錄」台股市值" is pressed on the dashboard, prefill
-  // is set to a fresh object each time — that reference change is what
-  // makes this effect fire again even if the same value is sent twice.
+  // When "帶入「每日紀錄」..." is pressed elsewhere in the app, prefill is
+  // set to a fresh object each time — that reference change is what makes
+  // this effect fire again even if the same value is sent twice. Only the
+  // fields actually present on prefill get overwritten, so the market-value
+  // button and the cost-basis button can each fill in just their own field.
   useEffect(() => {
     if (!prefill) return;
-    setForm((f) => ({ ...f, date: todayStr(), twValue: String(prefill.twValue) }));
+    setForm((f) => {
+      const next = { ...f, date: todayStr() };
+      if (prefill.twValue != null) next.twValue = String(prefill.twValue);
+      if (prefill.twCost != null) next.twCost = String(prefill.twCost);
+      return next;
+    });
   }, [prefill]);
   const add = () => {
     if (!form.twValue && !form.usValue) return;
@@ -1201,7 +1186,7 @@ function HoldingsPanel({ holdings, setHoldings }) {
 }
 
 // ---------------- Trades Panel ----------------
-function TradesPanel({ trades, setTrades, holdings }) {
+function TradesPanel({ trades, setTrades, holdings, costBasis, setCostBasis, accumulatedCost, onFillDailyCost }) {
   const [form, setForm] = useState({
     date: todayStr(), symbol: "", action: "buy", shares: "", price: "", fee: "", tax: "", note: "",
   });
@@ -1221,6 +1206,32 @@ function TradesPanel({ trades, setTrades, holdings }) {
 
   return (
     <div className="space-y-4">
+      {costBasis && (
+        <Panel title="成本追蹤">
+          <Field label="起始成本（交易紀錄開始追蹤之前，已經投入的成本）">
+            <input type="number" value={costBasis.startingCost}
+              onChange={(e) => setCostBasis({ ...costBasis, startingCost: Number(e.target.value || 0) })}
+              className="input" />
+          </Field>
+          <div className="flex justify-between items-baseline mt-3 text-sm mono">
+            <span style={{ color: COLORS.sub }}>目前累積成本（起始成本 + 全部買賣紀錄）</span>
+            <span className="font-bold" style={{ color: COLORS.gold }}>NT$ {nf(accumulatedCost)}</span>
+          </div>
+          {onFillDailyCost && (
+            <>
+              <button onClick={() => onFillDailyCost(Math.round(accumulatedCost))}
+                className="mt-3 w-full rounded-lg py-2 text-[11px] font-bold"
+                style={{ background: COLORS.bg, border: `1px solid ${COLORS.gold}`, color: COLORS.gold }}>
+                帶入「每日紀錄」台股成本
+              </button>
+              <div className="text-[10px] mt-1" style={{ color: COLORS.sub }}>
+                會跳到「每日紀錄」並自動填好今天的台股成本，確認後按「儲存紀錄」即可
+              </div>
+            </>
+          )}
+        </Panel>
+      )}
+
       <Panel title="新增交易">
         <div className="grid grid-cols-2 gap-2">
           <Field label="日期"><input type="date" value={form.date}
