@@ -198,6 +198,19 @@ function findCrossing(schedule, key, target) {
 }
 
 // ---------- live price helpers (from 存股監控) ----------
+// Plain fetch() has no timeout of its own — if a proxy hangs instead of
+// failing outright, the browser will wait on it indefinitely (or until its
+// own very long internal timeout), which is what made refreshes feel like
+// they'd stalled. This aborts and moves on after `ms` instead.
+async function fetchWithTimeout(url, options = {}, ms = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 // A single free CORS proxy (e.g. allorigins.win) will occasionally rate-limit
 // or briefly go down under repeated calls from the same browser session —
 // trying a short list of independent proxies in order means one being flaky
@@ -228,7 +241,7 @@ async function fetchLiveQuotesBatch(symbols) {
 
   try {
     // Try a direct request first (works in some environments / extensions).
-    const res = await fetch(targetUrl, { cache: "no-store" });
+    const res = await fetchWithTimeout(targetUrl, { cache: "no-store" }, 3000);
     if (res.ok) json = await res.json();
   } catch (e) {
     // Expected to fail in most browsers — TWSE's MIS endpoint doesn't send
@@ -239,7 +252,7 @@ async function fetchLiveQuotesBatch(symbols) {
   if (!json || !Array.isArray(json.msgArray)) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
-        const res2 = await fetch(buildProxyUrl(targetUrl), { cache: "no-store" });
+        const res2 = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: "no-store" });
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
         if (parsed && Array.isArray(parsed.msgArray)) { json = parsed; break; }
@@ -277,7 +290,7 @@ async function fetchYahooQuote(symbol) {
   let json = null;
   let lastErr = null;
   try {
-    const res = await fetch(targetUrl, { cache: "no-store" });
+    const res = await fetchWithTimeout(targetUrl, { cache: "no-store" }, 3000);
     if (res.ok) json = await res.json();
   } catch (e) {
     lastErr = e;
@@ -285,7 +298,7 @@ async function fetchYahooQuote(symbol) {
   if (!json) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
-        const res2 = await fetch(buildProxyUrl(targetUrl), { cache: "no-store" });
+        const res2 = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: "no-store" });
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
         if (parsed) { json = parsed; break; }
@@ -314,27 +327,17 @@ async function fetchYahooQuote(symbol) {
 }
 
 async function fetchQuotesWithFallback(symbols) {
-  // Trading hours: Yahoo is the only source. TWSE's free endpoint appears
-  // to need a browser session/cookie (from visiting mis.twse.com.tw
-  // directly) to return a genuine intraday tick — without it, it tends to
-  // just echo yesterday's close all day, which is exactly wrong for a
-  // "live" reading during market hours.
-  if (isTwseTradingHours()) {
-    const out = {};
-    let anySuccess = false;
-    const settled = await Promise.allSettled(symbols.map((s) => fetchYahooQuote(s)));
-    settled.forEach((r, i) => {
-      if (r.status === "fulfilled") { out[symbols[i]] = r.value; anySuccess = true; }
-    });
-    if (!anySuccess) throw new Error("Yahoo 全部失敗");
-    return out;
-  }
-
-  // Outside trading hours: use TWSE directly. This is exactly the situation
-  // where its "yesterday's close" behavior is actually the right answer —
-  // the official closing price for the day is what you want once the
-  // market's shut, and it's the exchange's own data rather than a
-  // third-party reseller's.
+  // Unified on TWSE only — no Yahoo, no time-of-day branching. Known
+  // limitation, accepted deliberately: this free endpoint tends to just
+  // echo yesterday's close during market hours (it appears to need a
+  // browser session/cookie for a genuine intraday tick, which we can't
+  // establish through a stateless CORS proxy). Outside market hours this
+  // isn't a limitation at all — the official closing price is exactly
+  // what you want then.
+  // NOTE: only "tse_" (上市/TWSE) symbols are queried right now, since
+  // the current watchlist (0050/0056/2330) is all TWSE-listed. If an
+  // 上櫃 (OTC, 櫃買中心) symbol is ever added to the watchlist, this needs
+  // an "otc_" prefix added for that symbol specifically.
   return await fetchLiveQuotesBatch(symbols);
 }
 
