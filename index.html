@@ -217,14 +217,18 @@ const CORS_PROXIES = [
 // 0050 / 0056 / 2330. A 上櫃 (OTC) stock would need an "otc_" prefix instead.
 async function fetchLiveQuotesBatch(symbols) {
   const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
-  const targetUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1&delay=0`;
+  // The "_ts" param is meaningless to TWSE — it's there purely to make the
+  // URL unique on every call, since some free CORS proxies (allorigins.win
+  // in particular) cache responses by URL and were serving back the same
+  // stale quote for minutes at a time otherwise.
+  const targetUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1&delay=0&_ts=${Date.now()}`;
 
   let json = null;
   let lastErr = null;
 
   try {
     // Try a direct request first (works in some environments / extensions).
-    const res = await fetch(targetUrl);
+    const res = await fetch(targetUrl, { cache: "no-store" });
     if (res.ok) json = await res.json();
   } catch (e) {
     // Expected to fail in most browsers — TWSE's MIS endpoint doesn't send
@@ -235,7 +239,7 @@ async function fetchLiveQuotesBatch(symbols) {
   if (!json || !Array.isArray(json.msgArray)) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
-        const res2 = await fetch(buildProxyUrl(targetUrl));
+        const res2 = await fetch(buildProxyUrl(targetUrl), { cache: "no-store" });
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
         if (parsed && Array.isArray(parsed.msgArray)) { json = parsed; break; }
@@ -268,12 +272,12 @@ async function fetchLiveQuotesBatch(symbols) {
 // an acceptable trade-off since it's the rarer, backup path.
 async function fetchYahooQuote(symbol) {
   const yahooSymbol = /^[0-9]/.test(symbol) ? `${symbol}.TW` : symbol;
-  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`;
+  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d&_ts=${Date.now()}`;
 
   let json = null;
   let lastErr = null;
   try {
-    const res = await fetch(targetUrl);
+    const res = await fetch(targetUrl, { cache: "no-store" });
     if (res.ok) json = await res.json();
   } catch (e) {
     lastErr = e;
@@ -281,7 +285,7 @@ async function fetchYahooQuote(symbol) {
   if (!json) {
     for (const buildProxyUrl of CORS_PROXIES) {
       try {
-        const res2 = await fetch(buildProxyUrl(targetUrl));
+        const res2 = await fetch(buildProxyUrl(targetUrl), { cache: "no-store" });
         if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
         const parsed = await res2.json();
         if (parsed) { json = parsed; break; }
@@ -310,24 +314,32 @@ async function fetchYahooQuote(symbol) {
 }
 
 async function fetchQuotesWithFallback(symbols) {
-  try {
-    return await fetchLiveQuotesBatch(symbols);
-  } catch (e) {
-    // TWSE batch call failed entirely — try Yahoo Finance per-symbol as an
-    // independent second source rather than giving up right away.
-    const out = {};
-    for (const s of symbols) {
-      try {
-        const r = await fetchYahooQuote(s);
-        out[s] = r;
-      } catch (e2) {
-        // leave this symbol out of the result; fetchAllLive's merge logic
-        // will fall back to the last cached price for it, if any.
-      }
+  // Yahoo Finance is the primary source. TWSE's own endpoint would be
+  // preferable (official source, one request for all symbols) but it
+  // appears to need a browser session/cookie — established by first
+  // visiting mis.twse.com.tw directly — to return a genuine same-day tick;
+  // without it, it silently falls back to showing yesterday's close every
+  // time, which is why prices looked frozen at 0.00% no matter what. Going
+  // through a stateless free CORS proxy, we can't reliably establish that
+  // session, so Yahoo (which needs no session) goes first instead.
+  const out = {};
+  let anySuccess = false;
+  for (const s of symbols) {
+    try {
+      const r = await fetchYahooQuote(s);
+      out[s] = r;
+      anySuccess = true;
+    } catch (e) {
+      // leave this one out; the rest still get tried
     }
-    if (Object.keys(out).length === 0) throw e;
-    return out;
+    await new Promise((res) => setTimeout(res, 300));
   }
+  if (anySuccess) return out;
+
+  // Yahoo failed for every symbol — fall back to the TWSE batch endpoint as
+  // a last resort. It may only return yesterday's close rather than a live
+  // tick, but that's still better than showing nothing at all.
+  return await fetchLiveQuotesBatch(symbols);
 }
 
 
