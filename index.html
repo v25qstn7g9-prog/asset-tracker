@@ -314,28 +314,14 @@ async function fetchYahooQuote(symbol) {
 }
 
 async function fetchQuotesWithFallback(symbols) {
-  // Yahoo Finance is the primary source. TWSE's own endpoint would be
-  // preferable (official source, one request for all symbols) but it
-  // appears to need a browser session/cookie — established by first
-  // visiting mis.twse.com.tw directly — to return a genuine same-day tick;
-  // without it, it silently falls back to showing yesterday's close every
-  // time, which is why prices looked frozen at 0.00% no matter what. Going
-  // through a stateless free CORS proxy, we can't reliably establish that
-  // session, so Yahoo (which needs no session) goes first instead.
-  // With only 3 symbols in the watchlist, firing all of them at once is a
-  // light enough load that it's not worth trading away the speed for extra
-  // caution — sequential-with-a-stagger only earns its keep at higher counts.
-  const out = {};
-  let anySuccess = false;
-  const settled = await Promise.allSettled(symbols.map((s) => fetchYahooQuote(s)));
-  settled.forEach((r, i) => {
-    if (r.status === "fulfilled") { out[symbols[i]] = r.value; anySuccess = true; }
-  });
-  if (anySuccess) return out;
-
-  // Yahoo failed for every symbol — fall back to the TWSE batch endpoint as
-  // a last resort. It may only return yesterday's close rather than a live
-  // tick, but that's still better than showing nothing at all.
+  // Fixed to TWSE only, per explicit request — no fallback to any other
+  // source. Known limitation: this free endpoint appears to require a
+  // browser session/cookie (established by visiting mis.twse.com.tw
+  // directly) to return a genuine same-day tick. Without it, it can
+  // silently keep returning yesterday's close (price == prevClose, 0.00%
+  // change) instead of a live price. That's a limitation of the source
+  // itself when accessed this way — not something retries or cache-busting
+  // can fix — so don't spend time re-diagnosing this as a bug if it recurs.
   return await fetchLiveQuotesBatch(symbols);
 }
 
