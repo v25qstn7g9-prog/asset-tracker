@@ -1086,6 +1086,11 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
 
       {monthKeys.length > 0 && (
         <Panel title="月度損益">
+          {monthKeys.some((mk) => monthlyStats[mk]?.approximate) && (
+            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
+              * 成本資料不完整的月份，市場報酬與新增投入無法精準拆分，數字為粗估
+            </div>
+          )}
           <div className="space-y-1.5 max-h-64 overflow-y-auto">
             {[...monthKeys].reverse().map((mk) => {
               const stat = monthlyStats[mk];
@@ -1093,7 +1098,7 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                 <div key={mk} className="rounded-lg px-3 py-2 text-xs mono"
                   style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
                   <div className="flex justify-between items-baseline">
-                    <span style={{ color: COLORS.sub }}>{mk}</span>
+                    <span style={{ color: COLORS.sub }}>{mk}{stat?.approximate ? " *" : ""}</span>
                     {stat ? (
                       <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
                         市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
@@ -1105,11 +1110,6 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                   {stat && stat.contribution != null && stat.contribution !== 0 && (
                     <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
                       新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
-                    </div>
-                  )}
-                  {stat && stat.approximate && (
-                    <div className="text-right mt-0.5" style={{ color: COLORS.sub }}>
-                      成本資料不完整，此為粗估（含新增投入）
                     </div>
                   )}
                 </div>
@@ -1138,7 +1138,7 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                     <div className="pt-3 pb-1.5 text-[11px] font-bold mono"
                       style={{ borderTop: i > 0 ? `1px solid ${COLORS.panelBorder}` : "none", marginTop: i > 0 ? "0.25rem" : 0 }}>
                       <div className="flex justify-between items-baseline">
-                        <span style={{ color: COLORS.gold }}>{mk}</span>
+                        <span style={{ color: COLORS.gold }}>{mk}{stat?.approximate ? " *" : ""}</span>
                         {stat ? (
                           <span style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
                             市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
@@ -1150,11 +1150,6 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                       {stat && stat.contribution != null && stat.contribution !== 0 && (
                         <div className="text-right font-normal" style={{ color: COLORS.gold }}>
                           新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
-                        </div>
-                      )}
-                      {stat && stat.approximate && (
-                        <div className="text-right font-normal" style={{ color: COLORS.sub }}>
-                          成本資料不完整，此為粗估（含新增投入）
                         </div>
                       )}
                     </div>
