@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="存股資產追蹤" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <title>存股資產追蹤 V4.6 Personal</title>
+  <title>存股資產追蹤 V4.6 Personal v2</title>
 
   <style>
     html,body,#root { margin:0; min-height:100%; background:#0A0F1C; }
@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal";
+const APP_VERSION = "4.6-personal-v2";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -218,12 +218,12 @@ function findCrossing(schedule, key, target) {
   return { index: schedule.length - 1, beyond: true };
 }
 
-// ---------- live price helpers (from 存股監控) ----------
-// Plain fetch() has no timeout of its own — if a proxy hangs instead of
-// failing outright, the browser will wait on it indefinitely (or until its
-// own very long internal timeout), which is what made refreshes feel like
-// they'd stalled. This aborts and moves on after `ms` instead.
-async function fetchWithTimeout(url, options = {}, ms = 9000) {
+// ---------- live price helpers (Cloudflare Pages integrated API) ----------
+// V2 architecture: the browser no longer calls TWSE/Yahoo or any public CORS
+// proxy directly. The same Pages project exposes /quote through
+// /functions/quote.js, so the browser makes a same-origin request and the
+// server-side Function handles TWSE + Yahoo fallback.
+async function fetchWithTimeout(url, options = {}, ms = 10000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
@@ -232,143 +232,43 @@ async function fetchWithTimeout(url, options = {}, ms = 9000) {
     clearTimeout(timer);
   }
 }
-// A single free CORS proxy (e.g. allorigins.win) will occasionally rate-limit
-// or briefly go down under repeated calls from the same browser session —
-// trying a short list of independent proxies in order means one being flaky
-// doesn't take down the whole fetch.
-const CORS_PROXIES = [
-  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-  (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
-];
-
-// TWSE's own "基本市況報導" real-time quote endpoint. This is the exchange's
-// own data (not a third-party reseller like Yahoo), and — importantly — lets
-// us ask for several stocks in ONE request via "|", instead of one request
-// per symbol. That's both faster and puts far less load on the free CORS
-// proxy than looping over symbols one at a time.
-// NOTE: the "tse_" prefix is for 上市 (listed on TWSE) stocks, which covers
-// 0050 / 0056 / 2330. A 上櫃 (OTC) stock would need an "otc_" prefix instead.
-async function fetchLiveQuotesBatch(symbols) {
-  const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
-  // The "_ts" param is meaningless to TWSE — it's there purely to make the
-  // URL unique on every call, since some free CORS proxies (allorigins.win
-  // in particular) cache responses by URL and were serving back the same
-  // stale quote for minutes at a time otherwise.
-  const targetUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1&delay=0&_ts=${Date.now()}`;
-
-  let json = null;
-  let lastErr = null;
-
-  try {
-    // Try a direct request first (works in some environments / extensions).
-    const res = await fetchWithTimeout(targetUrl, { cache: "no-store" }, 4000);
-    if (res.ok) json = await res.json();
-  } catch (e) {
-    // Expected to fail in most browsers — TWSE's MIS endpoint doesn't send
-    // CORS headers for arbitrary origins — fall through to the proxies.
-    lastErr = e;
-  }
-
-  if (!json || !Array.isArray(json.msgArray)) {
-    for (const buildProxyUrl of CORS_PROXIES) {
-      try {
-        const res2 = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: "no-store" });
-        if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
-        const parsed = await res2.json();
-        if (parsed && Array.isArray(parsed.msgArray)) { json = parsed; break; }
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-  }
-
-  if (!json || !Array.isArray(json.msgArray)) throw lastErr || new Error("所有來源皆失敗");
-
-  const out = {};
-  json.msgArray.forEach((item) => {
-    const symbol = item.c;
-    const prevClose = Number(item.y);
-    // "z" (成交價) is "-" before the day's first trade goes through (e.g.
-    // right after market open, or outside trading hours) — fall back to
-    // the previous close so the row still shows a sensible number.
-    const hasTraded = item.z && item.z !== "-";
-    const price = Number(hasTraded ? item.z : item.y);
-    out[symbol] = { symbol, price, prevClose, isUS: false, asOfDate: null, isStale: !hasTraded };
-  });
-  return out;
-}
-
-// Second source. Doesn't need a browser session the way TWSE's endpoint
-// does, so it's a genuinely independent fallback rather than hitting the
-// same wall for a different reason.
-async function fetchYahooQuote(symbol) {
-  const yahooSymbol = /^[0-9]/.test(symbol) ? `${symbol}.TW` : symbol;
-  const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d&_ts=${Date.now()}`;
-
-  let json = null;
-  let lastErr = null;
-  try {
-    const res = await fetchWithTimeout(targetUrl, { cache: "no-store" }, 4000);
-    if (res.ok) json = await res.json();
-  } catch (e) {
-    lastErr = e;
-  }
-  if (!json) {
-    for (const buildProxyUrl of CORS_PROXIES) {
-      try {
-        const res2 = await fetchWithTimeout(buildProxyUrl(targetUrl), { cache: "no-store" });
-        if (!res2.ok) { lastErr = new Error(`HTTP ${res2.status}`); continue; }
-        const parsed = await res2.json();
-        if (parsed) { json = parsed; break; }
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-  }
-  if (!json) throw lastErr || new Error("所有來源皆失敗");
-
-  const result = json?.chart?.result?.[0];
-  if (!result) throw new Error("no result");
-  const closes = result.indicators?.quote?.[0]?.close || [];
-  let lastIdx = -1;
-  for (let i = closes.length - 1; i >= 0; i--) {
-    if (closes[i] != null) { lastIdx = i; break; }
-  }
-  if (lastIdx < 0) throw new Error("no price");
-  const price = closes[lastIdx];
-  let prevIdx = -1;
-  for (let i = lastIdx - 1; i >= 0; i--) {
-    if (closes[i] != null) { prevIdx = i; break; }
-  }
-  const prevClose = prevIdx >= 0 ? closes[prevIdx] : (result.meta.chartPreviousClose ?? price);
-  return { symbol, price, prevClose, isUS: false, asOfDate: null, isStale: false };
-}
 
 async function fetchQuotesWithFallback(symbols) {
-  // Run through every available source in turn, filling in whichever
-  // symbols the previous source didn't cover — rather than committing to
-  // one source and failing outright if it doesn't come through.
+  const qs = encodeURIComponent(symbols.join(","));
+  const res = await fetchWithTimeout(`/quote?symbols=${qs}&_ts=${Date.now()}`, {
+    cache: "no-store",
+    headers: { "Accept": "application/json" },
+  }, 10000);
+
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const err = await res.json();
+      detail = err?.error ? `：${err.error}` : "";
+    } catch (_) {}
+    throw new Error(`報價 API 失敗 HTTP ${res.status}${detail}`);
+  }
+
+  const payload = await res.json();
+  if (!payload || typeof payload !== "object" || !payload.quotes) {
+    throw new Error("報價 API 回傳格式錯誤");
+  }
+
   const out = {};
+  Object.entries(payload.quotes).forEach(([symbol, q]) => {
+    if (!q || !Number.isFinite(Number(q.price))) return;
+    out[symbol] = {
+      symbol,
+      price: Number(q.price),
+      prevClose: Number.isFinite(Number(q.prevClose)) ? Number(q.prevClose) : Number(q.price),
+      isUS: false,
+      asOfDate: q.asOfDate ? new Date(q.asOfDate) : null,
+      isStale: Boolean(q.isStale),
+      source: q.source || payload.source || "server",
+    };
+  });
 
-  // 1st: TWSE (official, one request covers every symbol at once).
-  try {
-    const twse = await fetchLiveQuotesBatch(symbols);
-    Object.assign(out, twse);
-  } catch (e) {
-    // whole batch failed — leave `out` empty, Yahoo below covers everyone
-  }
-
-  // 2nd: Yahoo Finance, but only for whatever TWSE didn't return.
-  const missing = symbols.filter((s) => !out[s]);
-  if (missing.length) {
-    const settled = await Promise.allSettled(missing.map((s) => fetchYahooQuote(s)));
-    settled.forEach((r, i) => {
-      if (r.status === "fulfilled") out[missing[i]] = r.value;
-    });
-  }
-
-  if (Object.keys(out).length === 0) throw new Error("所有來源皆失敗");
+  if (Object.keys(out).length === 0) throw new Error("所有報價來源皆失敗");
   return out;
 }
 
