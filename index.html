@@ -218,44 +218,6 @@ function findCrossing(schedule, key, target) {
   return { index: schedule.length - 1, beyond: true };
 }
 
-
-// 月度績效：市值變化 − 當月淨投入 ≈ 當月真正賺賠（非完整時間加權報酬）
-function buildMonthlyPerformance(dailyRecords, trades) {
-  const sorted = [...dailyRecords].sort((a, b) => a.date.localeCompare(b.date));
-  const monthEnd = {};
-  for (const r of sorted) {
-    const ym = r.date.slice(0, 7);
-    monthEnd[ym] = {
-      date: r.date,
-      value: (r.twValue || 0) + (r.usValue || 0),
-    };
-  }
-  const monthlyInv = {};
-  for (const t of trades) {
-    const ym = String(t.date || "").slice(0, 7);
-    if (!ym) continue;
-    const signed = t.action === "buy" ? Number(t.amount || 0) : -Number(t.amount || 0);
-    monthlyInv[ym] = (monthlyInv[ym] || 0) + signed;
-  }
-  const months = Object.keys(monthEnd).sort();
-  const rows = [];
-  for (let i = 0; i < months.length; i++) {
-    const ym = months[i];
-    const cur = monthEnd[ym];
-    const invested = monthlyInv[ym] || 0;
-    if (i === 0) {
-      rows.push({ ym, value: cur.value, valueDelta: null, invested, pnl: null, retPct: null });
-      continue;
-    }
-    const prev = monthEnd[months[i - 1]];
-    const valueDelta = cur.value - prev.value;
-    const pnl = valueDelta - invested;
-    const retPct = prev.value ? (pnl / prev.value) * 100 : null;
-    rows.push({ ym, value: cur.value, valueDelta, invested, pnl, retPct });
-  }
-  return rows.reverse(); // newest first
-}
-
 // ---------- live price helpers (Cloudflare Pages Function) ----------
 // The front end sends the symbols that are actually held to the same-origin
 // /quote endpoint. Cloudflare then talks to TWSE/Yahoo server-side, so the
@@ -546,11 +508,6 @@ function AssetTracker() {
     total: r.twValue + r.usValue,
   }));
 
-  const monthlyPerf = useMemo(
-    () => buildMonthlyPerformance(dailyRecords, trades),
-    [dailyRecords, trades]
-  );
-
   const holdingsWithShares = useMemo(() => holdings.map((h) => {
     const bought = trades.filter((t) => t.symbol === h.symbol && t.action === "buy")
       .reduce((s, t) => s + t.shares, 0);
@@ -650,7 +607,7 @@ function AssetTracker() {
             capitalGain={capitalGain} totalDividends={totalDividends} totalReturn={totalReturn}
             totalReturnPct={totalReturnPct} highPoint={highPoint} drawdown={drawdown}
             chartData={chartData} goal={goal} totalInvested={totalInvested}
-            holdings={holdingsWithShares} monthlyPerf={monthlyPerf}
+            holdings={holdingsWithShares}
             onFillDailyTw={(value) => { setDailyPrefill({ twValue: value, nonce: Date.now() }); setTab("daily"); }}
           />
         )}
@@ -945,7 +902,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
 // ---------------- Dashboard ----------------
 function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, totalDividends,
   totalReturn, totalReturnPct, highPoint, drawdown, chartData, goal, totalInvested, holdings,
-  monthlyPerf = [], onFillDailyTw }) {
+  onFillDailyTw }) {
   const up = dailyChange >= 0;
   return (
     <div className="space-y-4">
@@ -998,43 +955,6 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
         註：目前成本來自券商/每日紀錄的持倉成本；若曾賣出、換股或用股息再投入，
         「粗估總報酬」不等同完整 XIRR 或全期間真實總報酬。
       </div>
-
-      {monthlyPerf.length > 1 && (
-        <Panel title="月度績效（粗估）">
-          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
-            當月損益 ≈ 月末市值 − 上月末市值 − 當月淨投入（買進 − 賣出）。
-            這不是完整時間加權報酬，但可避免把「新投入的本金」誤算成報酬。
-          </div>
-          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
-            <div>年月</div>
-            <div className="text-right">淨投入</div>
-            <div className="text-right">市值Δ</div>
-            <div className="text-right">損益</div>
-            <div className="text-right">報酬%</div>
-          </div>
-          <div className="space-y-1 max-h-72 overflow-y-auto">
-            {monthlyPerf.filter((r) => r.pnl != null).map((r) => (
-              <div key={r.ym}
-                className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
-                style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                <div>{r.ym}</div>
-                <div className="text-right" style={{ color: COLORS.sub }}>
-                  {r.invested >= 0 ? "" : "−"}{nf(Math.abs(r.invested))}
-                </div>
-                <div className="text-right" style={{ color: (r.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {(r.valueDelta || 0) >= 0 ? "+" : ""}{nf(r.valueDelta)}
-                </div>
-                <div className="text-right font-bold" style={{ color: (r.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {(r.pnl || 0) >= 0 ? "+" : ""}{nf(r.pnl)}
-                </div>
-                <div className="text-right font-bold" style={{ color: (r.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {r.retPct == null ? "—" : pf(r.retPct)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
 
       <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
         <div className="text-xs mb-2" style={{ color: COLORS.sub }}>資產高點</div>
@@ -1096,11 +1016,11 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   const remove = (id) => setRecords((r) => r.filter((x) => x.id !== id));
   const reversed = [...records].reverse();
 
-  // Monthly summary: for each month, compare the last record of that month
-  // against the last record before it (i.e. the prior month's closing
-  // value) to get that month's gain/loss and return %. The very first
-  // month in the whole history has no "before" record to compare against,
-  // so it's left blank rather than showing a misleading 0%/100%.
+  // 月度績效（以每日紀錄台股+美股計算）
+  // 市值Δ = 月末市值 − 上月末市值
+  // 淨投入 = 月末成本 − 上月末成本（兩端都有成本時）
+  // 損益   = 市值Δ − 淨投入
+  // 報酬% = 損益 ÷ 上月末市值
   const monthlyStats = {};
   const monthKey = (d) => d.slice(0, 7); // "YYYY-MM"
   let lastSeenPerMonth = {};
@@ -1108,37 +1028,36 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   const monthKeys = Object.keys(lastSeenPerMonth).sort();
   monthKeys.forEach((mk, i) => {
     const endRec = lastSeenPerMonth[mk];
-    const endValue = endRec.twValue + endRec.usValue;
+    const endValue = (endRec.twValue || 0) + (endRec.usValue || 0);
     const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
     const prevMk = i > 0 ? monthKeys[i - 1] : null;
     if (!prevMk) { monthlyStats[mk] = null; return; }
     const startRec = lastSeenPerMonth[prevMk];
-    const startValue = startRec.twValue + startRec.usValue;
+    const startValue = (startRec.twValue || 0) + (startRec.usValue || 0);
     const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
-    // Market return isolates actual investment performance from money you
-    // added that month: compare unrealized gain (value − cost) at the
-    // start vs end of the month, instead of comparing raw asset value
-    // (which would count new contributions as if they were investment
-    // gains). Contribution is the month's own number: how much your cost
-    // basis grew, i.e. how much new money went in.
-    // This only works if BOTH ends of the month have real cost data. If
-    // cost tracking started partway through your history, one side will
-    // read as 0 (not "genuinely zero cost", just "not filled in yet") —
-    // using it anyway would misread that as a huge fake gain/loss for
-    // whichever month straddles that transition. Fall back to the plain
-    // value-based estimate for exactly that month instead.
+    const valueDelta = endValue - startValue;
     const hasCostBothEnds = startCost > 0 && endCost > 0;
-    let marketReturn, pct, contribution;
+    let invested = null;
+    let pnl;
     if (hasCostBothEnds) {
-      marketReturn = (endValue - endCost) - (startValue - startCost);
-      pct = startValue ? (marketReturn / startValue) * 100 : 0;
-      contribution = endCost - startCost;
+      invested = endCost - startCost;
+      pnl = valueDelta - invested;
     } else {
-      marketReturn = endValue - startValue;
-      pct = startValue ? (marketReturn / startValue) * 100 : 0;
-      contribution = null; // unknown split between market move and new money
+      // 成本不完整：無法拆淨投入，損益暫等於市值Δ（會含新投入）
+      pnl = valueDelta;
     }
-    monthlyStats[mk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
+    const retPct = startValue ? (pnl / startValue) * 100 : 0;
+    monthlyStats[mk] = {
+      valueDelta,
+      invested,
+      pnl,
+      retPct,
+      approximate: !hasCostBothEnds,
+      // 相容舊欄位名稱（若有其他地方引用）
+      marketReturn: pnl,
+      pct: retPct,
+      contribution: invested,
+    };
   });
 
   return (
@@ -1165,34 +1084,40 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         <AddButton onClick={add} label="儲存紀錄" />
       </Panel>
 
-      {monthKeys.length > 0 && (
-        <Panel title="月度損益">
-          {monthKeys.some((mk) => monthlyStats[mk]?.approximate) && (
-            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
-              * 成本資料不完整的月份，市場報酬與新增投入無法精準拆分，數字為粗估
-            </div>
-          )}
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+      {monthKeys.length > 1 && (
+        <Panel title="月度績效（粗估）">
+          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
+            以每日紀錄「台股+美股」計算：損益 ≈ 市值Δ − 淨投入（成本Δ）。
+            * 表示該月成本資料不完整，損益暫等於市值Δ（可能含新投入）。
+          </div>
+          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
+            <div>年月</div>
+            <div className="text-right">淨投入</div>
+            <div className="text-right">市值Δ</div>
+            <div className="text-right">損益</div>
+            <div className="text-right">報酬%</div>
+          </div>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
             {[...monthKeys].reverse().map((mk) => {
               const stat = monthlyStats[mk];
+              if (!stat) return null;
               return (
-                <div key={mk} className="rounded-lg px-3 py-2 text-xs mono"
+                <div key={mk}
+                  className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
                   style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                  <div className="flex justify-between items-baseline">
-                    <span style={{ color: COLORS.sub }}>{mk}{stat?.approximate ? " *" : ""}</span>
-                    {stat ? (
-                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
-                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
-                      </span>
-                    ) : (
-                      <span style={{ color: COLORS.sub }}>最早紀錄，無前月可比較</span>
-                    )}
+                  <div>{mk}{stat.approximate ? " *" : ""}</div>
+                  <div className="text-right" style={{ color: COLORS.sub }}>
+                    {stat.invested == null ? "—" : `${stat.invested >= 0 ? "" : "−"}${nf(Math.abs(stat.invested))}`}
                   </div>
-                  {stat && stat.contribution != null && stat.contribution !== 0 && (
-                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
-                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
-                    </div>
-                  )}
+                  <div className="text-right" style={{ color: (stat.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {(stat.valueDelta || 0) >= 0 ? "+" : ""}{nf(stat.valueDelta)}
+                  </div>
+                  <div className="text-right font-bold" style={{ color: (stat.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {(stat.pnl || 0) >= 0 ? "+" : ""}{nf(stat.pnl)}
+                  </div>
+                  <div className="text-right font-bold" style={{ color: (stat.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {pf(stat.retPct)}
+                  </div>
                 </div>
               );
             })}
@@ -1218,19 +1143,22 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                   {showHeader && (
                     <div className="pt-3 pb-1.5 text-[11px] font-bold mono"
                       style={{ borderTop: i > 0 ? `1px solid ${COLORS.panelBorder}` : "none", marginTop: i > 0 ? "0.25rem" : 0 }}>
-                      <div className="flex justify-between items-baseline">
+                      <div className="flex justify-between items-baseline gap-2">
                         <span style={{ color: COLORS.gold }}>{mk}{stat?.approximate ? " *" : ""}</span>
                         {stat ? (
-                          <span style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
-                            市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                          <span className="text-right" style={{ color: (stat.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                            損益 {(stat.pnl || 0) >= 0 ? "+" : ""}{nf(stat.pnl)}（{pf(stat.retPct)}）
                           </span>
                         ) : (
                           <span style={{ color: COLORS.sub, fontWeight: "normal" }}>最早紀錄，無前月可比較</span>
                         )}
                       </div>
-                      {stat && stat.contribution != null && stat.contribution !== 0 && (
-                        <div className="text-right font-normal" style={{ color: COLORS.gold }}>
-                          新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                      {stat && (
+                        <div className="text-right font-normal mt-0.5" style={{ color: COLORS.sub }}>
+                          市值Δ {(stat.valueDelta || 0) >= 0 ? "+" : ""}{nf(stat.valueDelta)}
+                          {stat.invested != null && (
+                            <span> ／ 淨投入 {stat.invested >= 0 ? "+" : ""}{nf(stat.invested)}</span>
+                          )}
                         </div>
                       )}
                     </div>
