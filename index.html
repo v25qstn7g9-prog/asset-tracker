@@ -135,6 +135,33 @@ const todayStr = () => {
   return `${y}-${m}-${day}`;
 };
 const nf = (n) => (n ?? 0).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+
+// Recharts' interval="preserveStartEnd" spaces ticks evenly by ARRAY INDEX,
+// not by actual date. That's fine when data points are evenly spaced in time,
+// but this app's history mixes a few sparse early snapshots (2021-2024) with
+// dense near-daily records (2025-2026) — index-based spacing then crams every
+// visible tick into the dense recent stretch, making years of real history
+// invisible on the axis. This picks ticks evenly across the actual time span
+// instead, snapping each target time to the nearest real data point so the
+// returned values still exist in the chart's data (XAxis needs an exact match
+// to render a tick for a categorical dataKey like our date strings).
+function pickTimeBasedTicks(data, dateKey, count = 6) {
+  if (!data || data.length === 0) return [];
+  const times = data.map((d) => new Date(d[dateKey]).getTime());
+  const minT = times[0], maxT = times[times.length - 1];
+  if (minT === maxT) return [data[0][dateKey]];
+  const picked = [];
+  for (let i = 0; i < count; i++) {
+    const target = minT + ((maxT - minT) * i) / (count - 1);
+    let bestIdx = 0, bestDiff = Infinity;
+    for (let j = 0; j < times.length; j++) {
+      const diff = Math.abs(times[j] - target);
+      if (diff < bestDiff) { bestDiff = diff; bestIdx = j; }
+    }
+    picked.push(data[bestIdx][dateKey]);
+  }
+  return [...new Set(picked)];
+}
 const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
 // Animates a number counting up/down to its new value instead of jumping
@@ -931,7 +958,8 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke={COLORS.panelBorder} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.sub }} interval="preserveStartEnd" />
+                <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.sub }}
+                  ticks={pickTimeBasedTicks(chartData, "date", 6)} interval="preserveStartEnd" />
                 <YAxis tick={{ fontSize: 9, fill: COLORS.sub }}
                   tickFormatter={(v) => `${(v / 10000).toFixed(0)}萬`} width={44} />
                 <Tooltip
@@ -1016,11 +1044,11 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   const remove = (id) => setRecords((r) => r.filter((x) => x.id !== id));
   const reversed = [...records].reverse();
 
-  // 月度績效（以每日紀錄台股+美股計算）
-  // 市值Δ = 月末市值 − 上月末市值
-  // 淨投入 = 月末成本 − 上月末成本（兩端都有成本時）
-  // 損益   = 市值Δ − 淨投入
-  // 報酬% = 損益 ÷ 上月末市值
+  // Monthly summary: for each month, compare the last record of that month
+  // against the last record before it (i.e. the prior month's closing
+  // value) to get that month's gain/loss and return %. The very first
+  // month in the whole history has no "before" record to compare against,
+  // so it's left blank rather than showing a misleading 0%/100%.
   const monthlyStats = {};
   const monthKey = (d) => d.slice(0, 7); // "YYYY-MM"
   let lastSeenPerMonth = {};
@@ -1028,72 +1056,38 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   const monthKeys = Object.keys(lastSeenPerMonth).sort();
   monthKeys.forEach((mk, i) => {
     const endRec = lastSeenPerMonth[mk];
-    const endValue = (endRec.twValue || 0) + (endRec.usValue || 0);
+    const endValue = endRec.twValue + endRec.usValue;
     const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
     const prevMk = i > 0 ? monthKeys[i - 1] : null;
     if (!prevMk) { monthlyStats[mk] = null; return; }
     const startRec = lastSeenPerMonth[prevMk];
-    const startValue = (startRec.twValue || 0) + (startRec.usValue || 0);
+    const startValue = startRec.twValue + startRec.usValue;
     const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
-    const valueDelta = endValue - startValue;
+    // Market return isolates actual investment performance from money you
+    // added that month: compare unrealized gain (value − cost) at the
+    // start vs end of the month, instead of comparing raw asset value
+    // (which would count new contributions as if they were investment
+    // gains). Contribution is the month's own number: how much your cost
+    // basis grew, i.e. how much new money went in.
+    // This only works if BOTH ends of the month have real cost data. If
+    // cost tracking started partway through your history, one side will
+    // read as 0 (not "genuinely zero cost", just "not filled in yet") —
+    // using it anyway would misread that as a huge fake gain/loss for
+    // whichever month straddles that transition. Fall back to the plain
+    // value-based estimate for exactly that month instead.
     const hasCostBothEnds = startCost > 0 && endCost > 0;
-    let invested = null;
-    let pnl;
+    let marketReturn, pct, contribution;
     if (hasCostBothEnds) {
-      invested = endCost - startCost;
-      pnl = valueDelta - invested;
+      marketReturn = (endValue - endCost) - (startValue - startCost);
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = endCost - startCost;
     } else {
-      // 成本不完整：無法拆淨投入，損益暫等於市值Δ（會含新投入）
-      pnl = valueDelta;
+      marketReturn = endValue - startValue;
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = null; // unknown split between market move and new money
     }
-    const retPct = startValue ? (pnl / startValue) * 100 : 0;
-    monthlyStats[mk] = {
-      valueDelta,
-      invested,
-      pnl,
-      retPct,
-      approximate: !hasCostBothEnds,
-      // 相容舊欄位名稱（若有其他地方引用）
-      marketReturn: pnl,
-      pct: retPct,
-      contribution: invested,
-    };
+    monthlyStats[mk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
   });
-
-  // 年度績效：用各年最後一筆每日紀錄（台+美）對比前一年末
-  const yearlyStats = [];
-  const lastSeenPerYear = {};
-  records.forEach((r) => { lastSeenPerYear[String(r.date).slice(0, 4)] = r; });
-  const yearKeys = Object.keys(lastSeenPerYear).sort();
-  yearKeys.forEach((yk, i) => {
-    if (i === 0) return;
-    const endRec = lastSeenPerYear[yk];
-    const startRec = lastSeenPerYear[yearKeys[i - 1]];
-    const endValue = (endRec.twValue || 0) + (endRec.usValue || 0);
-    const startValue = (startRec.twValue || 0) + (startRec.usValue || 0);
-    const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
-    const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
-    const valueDelta = endValue - startValue;
-    const hasCostBothEnds = startCost > 0 && endCost > 0;
-    let invested = null;
-    let pnl;
-    if (hasCostBothEnds) {
-      invested = endCost - startCost;
-      pnl = valueDelta - invested;
-    } else {
-      pnl = valueDelta;
-    }
-    const retPct = startValue ? (pnl / startValue) * 100 : 0;
-    yearlyStats.push({
-      year: yk,
-      valueDelta,
-      invested,
-      pnl,
-      retPct,
-      approximate: !hasCostBothEnds,
-    });
-  });
-  yearlyStats.reverse(); // newest first
 
   return (
     <div className="space-y-4">
@@ -1119,77 +1113,34 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         <AddButton onClick={add} label="儲存紀錄" />
       </Panel>
 
-      {yearlyStats.length > 0 && (
-        <Panel title="年度績效（粗估）">
-          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
-            以各年最後一筆每日紀錄（台股+美股）計算：損益 ≈ 市值Δ − 淨投入（成本Δ）。
-            * 表示該年成本資料不完整，損益暫等於市值Δ（可能含新投入）。
-          </div>
-          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
-            <div>年份</div>
-            <div className="text-right">淨投入</div>
-            <div className="text-right">市值Δ</div>
-            <div className="text-right">損益</div>
-            <div className="text-right">報酬%</div>
-          </div>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
-            {yearlyStats.map((y) => (
-              <div key={y.year}
-                className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
-                style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                <div>{y.year}{y.approximate ? " *" : ""}</div>
-                <div className="text-right" style={{ color: COLORS.sub }}>
-                  {y.invested == null ? "—" : `${y.invested >= 0 ? "" : "−"}${nf(Math.abs(y.invested))}`}
-                </div>
-                <div className="text-right" style={{ color: (y.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {(y.valueDelta || 0) >= 0 ? "+" : ""}{nf(y.valueDelta)}
-                </div>
-                <div className="text-right font-bold" style={{ color: (y.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {(y.pnl || 0) >= 0 ? "+" : ""}{nf(y.pnl)}
-                </div>
-                <div className="text-right font-bold" style={{ color: (y.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                  {pf(y.retPct)}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
-
-      {monthKeys.length > 1 && (
-        <Panel title="月度績效（粗估）">
-          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
-            以每日紀錄「台股+美股」計算：損益 ≈ 市值Δ − 淨投入（成本Δ）。
-            * 表示該月成本資料不完整，損益暫等於市值Δ（可能含新投入）。
-          </div>
-          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
-            <div>年月</div>
-            <div className="text-right">淨投入</div>
-            <div className="text-right">市值Δ</div>
-            <div className="text-right">損益</div>
-            <div className="text-right">報酬%</div>
-          </div>
-          <div className="space-y-1 max-h-64 overflow-y-auto">
+      {monthKeys.length > 0 && (
+        <Panel title="月度損益">
+          {monthKeys.some((mk) => monthlyStats[mk]?.approximate) && (
+            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
+              * 成本資料不完整的月份，市場報酬與新增投入無法精準拆分，數字為粗估
+            </div>
+          )}
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
             {[...monthKeys].reverse().map((mk) => {
               const stat = monthlyStats[mk];
-              if (!stat) return null;
               return (
-                <div key={mk}
-                  className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
+                <div key={mk} className="rounded-lg px-3 py-2 text-xs mono"
                   style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                  <div>{mk}{stat.approximate ? " *" : ""}</div>
-                  <div className="text-right" style={{ color: COLORS.sub }}>
-                    {stat.invested == null ? "—" : `${stat.invested >= 0 ? "" : "−"}${nf(Math.abs(stat.invested))}`}
+                  <div className="flex justify-between items-baseline">
+                    <span style={{ color: COLORS.sub }}>{mk}{stat?.approximate ? " *" : ""}</span>
+                    {stat ? (
+                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
+                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                      </span>
+                    ) : (
+                      <span style={{ color: COLORS.sub }}>最早紀錄，無前月可比較</span>
+                    )}
                   </div>
-                  <div className="text-right" style={{ color: (stat.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                    {(stat.valueDelta || 0) >= 0 ? "+" : ""}{nf(stat.valueDelta)}
-                  </div>
-                  <div className="text-right font-bold" style={{ color: (stat.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                    {(stat.pnl || 0) >= 0 ? "+" : ""}{nf(stat.pnl)}
-                  </div>
-                  <div className="text-right font-bold" style={{ color: (stat.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                    {pf(stat.retPct)}
-                  </div>
+                  {stat && stat.contribution != null && stat.contribution !== 0 && (
+                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
+                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1215,22 +1166,19 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                   {showHeader && (
                     <div className="pt-3 pb-1.5 text-[11px] font-bold mono"
                       style={{ borderTop: i > 0 ? `1px solid ${COLORS.panelBorder}` : "none", marginTop: i > 0 ? "0.25rem" : 0 }}>
-                      <div className="flex justify-between items-baseline gap-2">
+                      <div className="flex justify-between items-baseline">
                         <span style={{ color: COLORS.gold }}>{mk}{stat?.approximate ? " *" : ""}</span>
                         {stat ? (
-                          <span className="text-right" style={{ color: (stat.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
-                            損益 {(stat.pnl || 0) >= 0 ? "+" : ""}{nf(stat.pnl)}（{pf(stat.retPct)}）
+                          <span style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
+                            市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
                           </span>
                         ) : (
                           <span style={{ color: COLORS.sub, fontWeight: "normal" }}>最早紀錄，無前月可比較</span>
                         )}
                       </div>
-                      {stat && (
-                        <div className="text-right font-normal mt-0.5" style={{ color: COLORS.sub }}>
-                          市值Δ {(stat.valueDelta || 0) >= 0 ? "+" : ""}{nf(stat.valueDelta)}
-                          {stat.invested != null && (
-                            <span> ／ 淨投入 {stat.invested >= 0 ? "+" : ""}{nf(stat.invested)}</span>
-                          )}
+                      {stat && stat.contribution != null && stat.contribution !== 0 && (
+                        <div className="text-right font-normal" style={{ color: COLORS.gold }}>
+                          新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
                         </div>
                       )}
                     </div>
