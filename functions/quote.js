@@ -42,6 +42,7 @@ async function fetchJson(url, timeoutMs = 7000) {
 }
 
 async function fetchTwse(symbols) {
+  // 目前全部用 tse_；若之後有上櫃代號，可再依代號判斷改 otc_
   const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_ts=${Date.now()}`;
   const data = await fetchJson(url, 6500);
@@ -73,29 +74,51 @@ async function fetchYahoo(symbol) {
   const result = data?.chart?.result?.[0];
   if (!result) throw new Error("Yahoo no result");
 
-  const closes = result.indicators?.quote?.[0]?.close || [];
-  let lastIdx = -1;
-  for (let i = closes.length - 1; i >= 0; i--) {
-    if (closes[i] != null && Number.isFinite(Number(closes[i]))) { lastIdx = i; break; }
-  }
-  if (lastIdx < 0) throw new Error("Yahoo no price");
+  const meta = result.meta || {};
 
-  let prevIdx = -1;
-  for (let i = lastIdx - 1; i >= 0; i--) {
-    if (closes[i] != null && Number.isFinite(Number(closes[i]))) { prevIdx = i; break; }
+  // 優先用 meta 的即時價與昨收（比自己從日 K close 陣列推更穩）
+  let price = Number(meta.regularMarketPrice);
+  let prevClose = Number(
+    meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose
+  );
+
+  // meta 缺資料時才退回日 K
+  if (!Number.isFinite(price) || !Number.isFinite(prevClose)) {
+    const closes = result.indicators?.quote?.[0]?.close || [];
+    let lastIdx = -1;
+    for (let i = closes.length - 1; i >= 0; i--) {
+      if (closes[i] != null && Number.isFinite(Number(closes[i]))) {
+        lastIdx = i;
+        break;
+      }
+    }
+    if (lastIdx < 0) throw new Error("Yahoo no price");
+
+    let prevIdx = -1;
+    for (let i = lastIdx - 1; i >= 0; i--) {
+      if (closes[i] != null && Number.isFinite(Number(closes[i]))) {
+        prevIdx = i;
+        break;
+      }
+    }
+
+    if (!Number.isFinite(price)) {
+      price = Number(closes[lastIdx]);
+    }
+    if (!Number.isFinite(prevClose)) {
+      prevClose = prevIdx >= 0 ? Number(closes[prevIdx]) : price;
+    }
   }
 
-  const price = Number(closes[lastIdx]);
-  const prevClose = prevIdx >= 0
-    ? Number(closes[prevIdx])
-    : Number(result.meta?.chartPreviousClose ?? price);
-  const ts = Array.isArray(result.timestamp) ? result.timestamp[lastIdx] : null;
+  if (!Number.isFinite(price)) throw new Error("Yahoo no price");
 
   return {
     price,
     prevClose: Number.isFinite(prevClose) ? prevClose : price,
     isStale: false,
-    asOfDate: ts ? new Date(ts * 1000).toISOString() : null,
+    asOfDate: meta.regularMarketTime
+      ? new Date(meta.regularMarketTime * 1000).toISOString()
+      : null,
     source: "Yahoo",
   };
 }
@@ -114,19 +137,24 @@ export async function onRequestGet(context) {
     const quotes = {};
     const errors = [];
 
+    // 1. 優先 TWSE
     try {
       Object.assign(quotes, await fetchTwse(symbols));
     } catch (e) {
       errors.push(`TWSE: ${e?.message || e}`);
     }
 
+    // 2. 缺的才走 Yahoo
     const missing = symbols.filter((s) => !quotes[s]);
     if (missing.length) {
       const results = await Promise.allSettled(missing.map(fetchYahoo));
       results.forEach((result, i) => {
         const symbol = missing[i];
-        if (result.status === "fulfilled") quotes[symbol] = result.value;
-        else errors.push(`Yahoo ${symbol}: ${result.reason?.message || result.reason}`);
+        if (result.status === "fulfilled") {
+          quotes[symbol] = result.value;
+        } else {
+          errors.push(`Yahoo ${symbol}: ${result.reason?.message || result.reason}`);
+        }
       });
     }
 
