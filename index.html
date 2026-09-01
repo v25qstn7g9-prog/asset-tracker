@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.3";
+const APP_VERSION = "4.6-personal-v2.5";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -168,6 +168,32 @@ function formatTickDate(t) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+// Builds one row per calendar year that has data: each row's value is the
+// last recorded total *within that year* (for the current year, that's
+// simply the latest record). Gain/loss compares to the previous row's
+// value — i.e. change over that calendar year — not to cost basis, same
+// value-based simplification as the other stat cards. The very first year
+// with data has no prior year-end to compare against, so it's shown as a
+// starting point with no gain/loss rather than a misleading number.
+function buildYearlyTable(chartData) {
+  if (!chartData || chartData.length === 0) return [];
+  const lastOfYear = new Map();
+  for (const d of chartData) {
+    lastOfYear.set(new Date(d.t).getFullYear(), d);
+  }
+  const years = [...lastOfYear.keys()].sort((a, b) => a - b);
+  const rows = [];
+  let prevValue = null;
+  for (const year of years) {
+    const endValue = lastOfYear.get(year).total;
+    const gain = prevValue != null ? endValue - prevValue : null;
+    const pct = prevValue ? (gain / prevValue) * 100 : null;
+    rows.push({ year, endValue, gain, pct });
+    prevValue = endValue;
+  }
+  return rows.reverse(); // most recent year first
 }
 const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
@@ -543,6 +569,23 @@ function AssetTracker() {
     total: r.twValue + r.usValue,
   }));
 
+  // "今年以來(YTD)" — market-value change since the start of the current
+  // calendar year. Like the other stat cards, this is value-based, not a
+  // cost-adjusted/time-weighted return: it doesn't separate new
+  // contributions from investment gains. Baseline is the last record on or
+  // before Jan 1 of this year; if tracking only started sometime this year,
+  // falls back to the very first record so the number stays meaningful.
+  const ytdBase = (() => {
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
+    let base = null;
+    for (let i = chartData.length - 1; i >= 0; i--) {
+      if (chartData[i].t <= yearStart) { base = chartData[i]; break; }
+    }
+    return base || chartData[0] || null;
+  })();
+  const ytdGain = ytdBase ? totalToday - ytdBase.total : 0;
+  const ytdPct = ytdBase && ytdBase.total ? (ytdGain / ytdBase.total) * 100 : 0;
+
   const holdingsWithShares = useMemo(() => holdings.map((h) => {
     const bought = trades.filter((t) => t.symbol === h.symbol && t.action === "buy")
       .reduce((s, t) => s + t.shares, 0);
@@ -641,6 +684,7 @@ function AssetTracker() {
             totalToday={totalToday} dailyChange={dailyChange} dailyChangePct={dailyChangePct}
             capitalGain={capitalGain} totalDividends={totalDividends} totalReturn={totalReturn}
             totalReturnPct={totalReturnPct} highPoint={highPoint} drawdown={drawdown}
+            ytdGain={ytdGain} ytdPct={ytdPct}
             chartData={chartData} goal={goal} totalInvested={totalInvested}
             holdings={holdingsWithShares}
             onFillDailyTw={(value) => { setDailyPrefill({ twValue: value, nonce: Date.now() }); setTab("daily"); }}
@@ -946,7 +990,7 @@ const CHART_RANGES = [
 ];
 
 function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, totalDividends,
-  totalReturn, totalReturnPct, highPoint, drawdown, chartData, goal, totalInvested, holdings,
+  totalReturn, totalReturnPct, highPoint, drawdown, ytdGain, ytdPct, chartData, goal, totalInvested, holdings,
   onFillDailyTw }) {
   const up = dailyChange >= 0;
   // Defaults to "1年" rather than "全部": with 3+ sparse years plotted
@@ -966,6 +1010,7 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
     // than showing a near-empty chart.
     return filtered.length > 1 ? filtered : chartData;
   }, [chartData, chartRangeId]);
+  const yearlyRows = useMemo(() => buildYearlyTable(chartData), [chartData]);
   return (
     <div className="space-y-4">
       <div className="rounded-2xl p-4" style={{
@@ -1033,11 +1078,37 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
         <StatCard label="累積股息" value={`NT$ ${nf(totalDividends)}`} tone="gold" />
         <StatCard label="粗估總報酬" value={`NT$ ${nf(totalReturn)}`} tone={totalReturn >= 0 ? "gain" : "loss"} />
         <StatCard label="粗估報酬率" value={pf(totalReturnPct)} tone={totalReturnPct >= 0 ? "gain" : "loss"} />
+        <StatCard label="今年以來(YTD)" value={`${nf(ytdGain)}（${pf(ytdPct)}）`} tone={ytdGain >= 0 ? "gain" : "loss"} className="col-span-2" />
       </div>
       <div className="text-[11px] px-1" style={{ color: COLORS.sub }}>
         註：目前成本來自券商/每日紀錄的持倉成本；若曾賣出、換股或用股息再投入，
         「粗估總報酬」不等同完整 XIRR 或全期間真實總報酬。
       </div>
+
+      {yearlyRows.length > 0 && (
+        <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
+          <div className="text-xs mb-2" style={{ color: COLORS.sub }}>年度損益</div>
+          <div className="space-y-2">
+            {yearlyRows.map((row) => (
+              <div key={row.year} className="flex items-center justify-between text-sm mono">
+                <span style={{ color: COLORS.sub }}>{row.year}</span>
+                <span>NT$ {nf(row.endValue)}</span>
+                {row.gain == null ? (
+                  <span style={{ color: COLORS.sub }}>起始</span>
+                ) : (
+                  <span style={{ color: row.gain >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {row.gain >= 0 ? "+" : ""}{nf(row.gain)}（{pf(row.pct)}）
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="text-[11px] mt-2" style={{ color: COLORS.sub }}>
+            註：每年數字取該年度最後一筆紀錄的市值，年度變化為市值差，非成本調整後報酬；
+            當年（今年）數字即為最新一筆紀錄。
+          </div>
+        </div>
+      )}
 
       <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
         <div className="text-xs mb-2" style={{ color: COLORS.sub }}>資產高點</div>
@@ -1058,10 +1129,10 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
   );
 }
 
-function StatCard({ label, value, tone }) {
+function StatCard({ label, value, tone, className = "" }) {
   const color = tone === "gain" ? COLORS.gain : tone === "loss" ? COLORS.loss : tone === "gold" ? COLORS.gold : COLORS.text;
   return (
-    <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
+    <div className={`rounded-2xl p-4 ${className}`} style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
       <div className="text-xs" style={{ color: COLORS.sub }}>{label}</div>
       <div className="text-lg font-bold mono mt-1" style={{ color }}>{value}</div>
     </div>
