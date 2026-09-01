@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.5";
+const APP_VERSION = "4.6-personal-v2.6";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -170,31 +170,6 @@ function formatTickDate(t) {
   return `${y}-${m}-${day}`;
 }
 
-// Builds one row per calendar year that has data: each row's value is the
-// last recorded total *within that year* (for the current year, that's
-// simply the latest record). Gain/loss compares to the previous row's
-// value — i.e. change over that calendar year — not to cost basis, same
-// value-based simplification as the other stat cards. The very first year
-// with data has no prior year-end to compare against, so it's shown as a
-// starting point with no gain/loss rather than a misleading number.
-function buildYearlyTable(chartData) {
-  if (!chartData || chartData.length === 0) return [];
-  const lastOfYear = new Map();
-  for (const d of chartData) {
-    lastOfYear.set(new Date(d.t).getFullYear(), d);
-  }
-  const years = [...lastOfYear.keys()].sort((a, b) => a - b);
-  const rows = [];
-  let prevValue = null;
-  for (const year of years) {
-    const endValue = lastOfYear.get(year).total;
-    const gain = prevValue != null ? endValue - prevValue : null;
-    const pct = prevValue ? (gain / prevValue) * 100 : null;
-    rows.push({ year, endValue, gain, pct });
-    prevValue = endValue;
-  }
-  return rows.reverse(); // most recent year first
-}
 const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
 // Animates a number counting up/down to its new value instead of jumping
@@ -1010,7 +985,6 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
     // than showing a near-empty chart.
     return filtered.length > 1 ? filtered : chartData;
   }, [chartData, chartRangeId]);
-  const yearlyRows = useMemo(() => buildYearlyTable(chartData), [chartData]);
   return (
     <div className="space-y-4">
       <div className="rounded-2xl p-4" style={{
@@ -1084,31 +1058,6 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
         註：目前成本來自券商/每日紀錄的持倉成本；若曾賣出、換股或用股息再投入，
         「粗估總報酬」不等同完整 XIRR 或全期間真實總報酬。
       </div>
-
-      {yearlyRows.length > 0 && (
-        <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
-          <div className="text-xs mb-2" style={{ color: COLORS.sub }}>年度損益</div>
-          <div className="space-y-2">
-            {yearlyRows.map((row) => (
-              <div key={row.year} className="flex items-center justify-between text-sm mono">
-                <span style={{ color: COLORS.sub }}>{row.year}</span>
-                <span>NT$ {nf(row.endValue)}</span>
-                {row.gain == null ? (
-                  <span style={{ color: COLORS.sub }}>起始</span>
-                ) : (
-                  <span style={{ color: row.gain >= 0 ? COLORS.gain : COLORS.loss }}>
-                    {row.gain >= 0 ? "+" : ""}{nf(row.gain)}（{pf(row.pct)}）
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="text-[11px] mt-2" style={{ color: COLORS.sub }}>
-            註：每年數字取該年度最後一筆紀錄的市值，年度變化為市值差，非成本調整後報酬；
-            當年（今年）數字即為最新一筆紀錄。
-          </div>
-        </div>
-      )}
 
       <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
         <div className="text-xs mb-2" style={{ color: COLORS.sub }}>資產高點</div>
@@ -1215,6 +1164,38 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
     monthlyStats[mk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
   });
 
+  // Yearly summary: same market-return / contribution split as monthly
+  // above, just grouped by year instead of month. Reuses the exact same
+  // logic (and the same "no cost data on one side" fallback) so the
+  // numbers here are directly comparable to the monthly breakdown.
+  const yearlyStats = {};
+  const yearKey = (d) => d.slice(0, 4); // "YYYY"
+  let lastSeenPerYear = {};
+  records.forEach((r) => { lastSeenPerYear[yearKey(r.date)] = r; });
+  const yearKeys = Object.keys(lastSeenPerYear).sort();
+  yearKeys.forEach((yk, i) => {
+    const endRec = lastSeenPerYear[yk];
+    const endValue = endRec.twValue + endRec.usValue;
+    const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
+    const prevYk = i > 0 ? yearKeys[i - 1] : null;
+    if (!prevYk) { yearlyStats[yk] = null; return; }
+    const startRec = lastSeenPerYear[prevYk];
+    const startValue = startRec.twValue + startRec.usValue;
+    const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
+    const hasCostBothEnds = startCost > 0 && endCost > 0;
+    let marketReturn, pct, contribution;
+    if (hasCostBothEnds) {
+      marketReturn = (endValue - endCost) - (startValue - startCost);
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = endCost - startCost;
+    } else {
+      marketReturn = endValue - startValue;
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = null;
+    }
+    yearlyStats[yk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
+  });
+
   return (
     <div className="space-y-4">
       <Panel title="新增每日紀錄">
@@ -1260,6 +1241,41 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                       </span>
                     ) : (
                       <span style={{ color: COLORS.sub }}>最早紀錄，無前月可比較</span>
+                    )}
+                  </div>
+                  {stat && stat.contribution != null && stat.contribution !== 0 && (
+                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
+                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+
+      {yearKeys.length > 0 && (
+        <Panel title="年度損益">
+          {yearKeys.some((yk) => yearlyStats[yk]?.approximate) && (
+            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
+              * 成本資料不完整的年份，市場報酬與新增投入無法精準拆分，數字為粗估
+            </div>
+          )}
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {[...yearKeys].reverse().map((yk) => {
+              const stat = yearlyStats[yk];
+              return (
+                <div key={yk} className="rounded-lg px-3 py-2 text-xs mono"
+                  style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                  <div className="flex justify-between items-baseline">
+                    <span style={{ color: COLORS.sub }}>{yk}{stat?.approximate ? " *" : ""}</span>
+                    {stat ? (
+                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
+                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                      </span>
+                    ) : (
+                      <span style={{ color: COLORS.sub }}>最早紀錄，無前年可比較</span>
                     )}
                   </div>
                   {stat && stat.contribution != null && stat.contribution !== 0 && (
