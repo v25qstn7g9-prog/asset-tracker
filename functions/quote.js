@@ -1,11 +1,8 @@
-// Was a fixed Set of exactly 3 symbols — now a format check instead, since
-// the front end sends whatever's currently held (see LIVE_WATCHLIST removal
-// in index.html), not a hardcoded list. This still blocks obviously-invalid
-// input (e.g. someone probing the endpoint with garbage), just without
-// needing to hand-edit this list every time the front end's holdings change.
-// Matches Taiwan listed/OTC ticker shapes: 4-6 digits, optional trailing
-// letter (covers plain stocks like 2330, ETFs like 0050/006208, and
-// lettered ETF codes like 00981A / 00685L).
+// Stock quote Cloudflare Pages Function
+// Priority: TWSE MIS (authoritative for TW stocks) → Yahoo fallback
+// Fixed: Yahoo prevClose now prefers regularMarketPreviousClose to avoid
+// adjusted-close mismatches that inflate change %.
+
 const SYMBOL_PATTERN = /^[0-9]{4,6}[A-Z]?$/;
 function isAllowedSymbol(s) {
   return SYMBOL_PATTERN.test(s);
@@ -30,7 +27,7 @@ async function fetchJson(url, timeoutMs = 7000) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "accept": "application/json,text/plain,*/*",
+        accept: "application/json,text/plain,*/*",
         "user-agent": "Mozilla/5.0 (compatible; StockTracker/4.6-v2)",
       },
     });
@@ -41,10 +38,13 @@ async function fetchJson(url, timeoutMs = 7000) {
   }
 }
 
+/** TWSE MIS — y = 昨收, z = 最新成交價 */
 async function fetchTwse(symbols) {
-  // 目前全部用 tse_；若之後有上櫃代號，可再依代號判斷改 otc_
+  // 上市用 tse_；若之後有上櫃可擴充 otc_
   const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
-  const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_ts=${Date.now()}`;
+  const url =
+    `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}` +
+    `&json=1&delay=0&_ts=${Date.now()}`;
   const data = await fetchJson(url, 6500);
   if (!data || !Array.isArray(data.msgArray)) throw new Error("TWSE invalid response");
 
@@ -52,10 +52,12 @@ async function fetchTwse(symbols) {
   for (const item of data.msgArray) {
     const symbol = String(item.c || "");
     if (!symbols.includes(symbol)) continue;
+
     const prevClose = Number(item.y);
     const hasTraded = item.z && item.z !== "-" && Number.isFinite(Number(item.z));
     const price = Number(hasTraded ? item.z : item.y);
     if (!Number.isFinite(price)) continue;
+
     quotes[symbol] = {
       price,
       prevClose: Number.isFinite(prevClose) ? prevClose : price,
@@ -67,22 +69,35 @@ async function fetchTwse(symbols) {
   return quotes;
 }
 
+/**
+ * Yahoo chart API
+ * Prefer meta.regularMarketPrice + meta.regularMarketPreviousClose
+ * (same unadjusted basis). Fall back carefully if missing.
+ */
 async function fetchYahoo(symbol) {
   const yahooSymbol = `${symbol}.TW`;
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=5d&_ts=${Date.now()}`;
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}` +
+    `?interval=1d&range=5d&_ts=${Date.now()}`;
   const data = await fetchJson(url, 6500);
   const result = data?.chart?.result?.[0];
   if (!result) throw new Error("Yahoo no result");
 
   const meta = result.meta || {};
 
-  // 優先用 meta 的即時價與昨收（比自己從日 K close 陣列推更穩）
+  // 1) Best pair: live price + official previous close (unadjusted)
   let price = Number(meta.regularMarketPrice);
-  let prevClose = Number(
-    meta.chartPreviousClose ?? meta.previousClose ?? meta.regularMarketPreviousClose
-  );
+  let prevClose = Number(meta.regularMarketPreviousClose);
 
-  // meta 缺資料時才退回日 K
+  // 2) Secondary meta fields
+  if (!Number.isFinite(prevClose)) {
+    prevClose = Number(meta.previousClose ?? meta.chartPreviousClose);
+  }
+  if (!Number.isFinite(price)) {
+    price = Number(meta.previousClose);
+  }
+
+  // 3) Last resort: daily close series (can be adjusted — use only if needed)
   if (!Number.isFinite(price) || !Number.isFinite(prevClose)) {
     const closes = result.indicators?.quote?.[0]?.close || [];
     let lastIdx = -1;
@@ -102,9 +117,7 @@ async function fetchYahoo(symbol) {
       }
     }
 
-    if (!Number.isFinite(price)) {
-      price = Number(closes[lastIdx]);
-    }
+    if (!Number.isFinite(price)) price = Number(closes[lastIdx]);
     if (!Number.isFinite(prevClose)) {
       prevClose = prevIdx >= 0 ? Number(closes[prevIdx]) : price;
     }
@@ -137,25 +150,50 @@ export async function onRequestGet(context) {
     const quotes = {};
     const errors = [];
 
-    // 1. 優先 TWSE
-    try {
-      Object.assign(quotes, await fetchTwse(symbols));
-    } catch (e) {
-      errors.push(`TWSE: ${e?.message || e}`);
+    // --- Parallel: TWSE first preference, Yahoo fills gaps ---
+    let twseQuotes = {};
+    let yahooMap = {};
+
+    const [twseResult, ...yahooResults] = await Promise.allSettled([
+      fetchTwse(symbols),
+      ...symbols.map((s) => fetchYahoo(s)),
+    ]);
+
+    if (twseResult.status === "fulfilled") {
+      twseQuotes = twseResult.value;
+    } else {
+      errors.push(`TWSE: ${twseResult.reason?.message || twseResult.reason}`);
     }
 
-    // 2. 缺的才走 Yahoo
-    const missing = symbols.filter((s) => !quotes[s]);
-    if (missing.length) {
-      const results = await Promise.allSettled(missing.map(fetchYahoo));
-      results.forEach((result, i) => {
-        const symbol = missing[i];
-        if (result.status === "fulfilled") {
-          quotes[symbol] = result.value;
-        } else {
-          errors.push(`Yahoo ${symbol}: ${result.reason?.message || result.reason}`);
-        }
-      });
+    symbols.forEach((symbol, i) => {
+      const r = yahooResults[i];
+      if (r.status === "fulfilled") yahooMap[symbol] = r.value;
+      else errors.push(`Yahoo ${symbol}: ${r.reason?.message || r.reason}`);
+    });
+
+    for (const symbol of symbols) {
+      const tw = twseQuotes[symbol];
+      const yh = yahooMap[symbol];
+
+      if (tw && Number.isFinite(tw.price) && Number.isFinite(tw.prevClose)) {
+        // Prefer TWSE always when present
+        quotes[symbol] = tw;
+        continue;
+      }
+
+      if (yh && Number.isFinite(yh.price) && Number.isFinite(yh.prevClose)) {
+        quotes[symbol] = yh;
+        continue;
+      }
+
+      // If TWSE had price but missing prevClose, try hybrid
+      if (tw && Number.isFinite(tw.price) && yh && Number.isFinite(yh.prevClose)) {
+        quotes[symbol] = {
+          ...tw,
+          prevClose: yh.prevClose,
+          source: "TWSE+Yahoo",
+        };
+      }
     }
 
     if (!Object.keys(quotes).length) {
