@@ -218,6 +218,44 @@ function findCrossing(schedule, key, target) {
   return { index: schedule.length - 1, beyond: true };
 }
 
+
+// 月度績效：市值變化 − 當月淨投入 ≈ 當月真正賺賠（非完整時間加權報酬）
+function buildMonthlyPerformance(dailyRecords, trades) {
+  const sorted = [...dailyRecords].sort((a, b) => a.date.localeCompare(b.date));
+  const monthEnd = {};
+  for (const r of sorted) {
+    const ym = r.date.slice(0, 7);
+    monthEnd[ym] = {
+      date: r.date,
+      value: (r.twValue || 0) + (r.usValue || 0),
+    };
+  }
+  const monthlyInv = {};
+  for (const t of trades) {
+    const ym = String(t.date || "").slice(0, 7);
+    if (!ym) continue;
+    const signed = t.action === "buy" ? Number(t.amount || 0) : -Number(t.amount || 0);
+    monthlyInv[ym] = (monthlyInv[ym] || 0) + signed;
+  }
+  const months = Object.keys(monthEnd).sort();
+  const rows = [];
+  for (let i = 0; i < months.length; i++) {
+    const ym = months[i];
+    const cur = monthEnd[ym];
+    const invested = monthlyInv[ym] || 0;
+    if (i === 0) {
+      rows.push({ ym, value: cur.value, valueDelta: null, invested, pnl: null, retPct: null });
+      continue;
+    }
+    const prev = monthEnd[months[i - 1]];
+    const valueDelta = cur.value - prev.value;
+    const pnl = valueDelta - invested;
+    const retPct = prev.value ? (pnl / prev.value) * 100 : null;
+    rows.push({ ym, value: cur.value, valueDelta, invested, pnl, retPct });
+  }
+  return rows.reverse(); // newest first
+}
+
 // ---------- live price helpers (Cloudflare Pages Function) ----------
 // The front end sends the symbols that are actually held to the same-origin
 // /quote endpoint. Cloudflare then talks to TWSE/Yahoo server-side, so the
@@ -508,6 +546,11 @@ function AssetTracker() {
     total: r.twValue + r.usValue,
   }));
 
+  const monthlyPerf = useMemo(
+    () => buildMonthlyPerformance(dailyRecords, trades),
+    [dailyRecords, trades]
+  );
+
   const holdingsWithShares = useMemo(() => holdings.map((h) => {
     const bought = trades.filter((t) => t.symbol === h.symbol && t.action === "buy")
       .reduce((s, t) => s + t.shares, 0);
@@ -607,7 +650,7 @@ function AssetTracker() {
             capitalGain={capitalGain} totalDividends={totalDividends} totalReturn={totalReturn}
             totalReturnPct={totalReturnPct} highPoint={highPoint} drawdown={drawdown}
             chartData={chartData} goal={goal} totalInvested={totalInvested}
-            holdings={holdingsWithShares}
+            holdings={holdingsWithShares} monthlyPerf={monthlyPerf}
             onFillDailyTw={(value) => { setDailyPrefill({ twValue: value, nonce: Date.now() }); setTab("daily"); }}
           />
         )}
@@ -902,7 +945,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
 // ---------------- Dashboard ----------------
 function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, totalDividends,
   totalReturn, totalReturnPct, highPoint, drawdown, chartData, goal, totalInvested, holdings,
-  onFillDailyTw }) {
+  monthlyPerf = [], onFillDailyTw }) {
   const up = dailyChange >= 0;
   return (
     <div className="space-y-4">
@@ -955,6 +998,43 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
         註：目前成本來自券商/每日紀錄的持倉成本；若曾賣出、換股或用股息再投入，
         「粗估總報酬」不等同完整 XIRR 或全期間真實總報酬。
       </div>
+
+      {monthlyPerf.length > 1 && (
+        <Panel title="月度績效（粗估）">
+          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
+            當月損益 ≈ 月末市值 − 上月末市值 − 當月淨投入（買進 − 賣出）。
+            這不是完整時間加權報酬，但可避免把「新投入的本金」誤算成報酬。
+          </div>
+          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
+            <div>年月</div>
+            <div className="text-right">淨投入</div>
+            <div className="text-right">市值Δ</div>
+            <div className="text-right">損益</div>
+            <div className="text-right">報酬%</div>
+          </div>
+          <div className="space-y-1 max-h-72 overflow-y-auto">
+            {monthlyPerf.filter((r) => r.pnl != null).map((r) => (
+              <div key={r.ym}
+                className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
+                style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                <div>{r.ym}</div>
+                <div className="text-right" style={{ color: COLORS.sub }}>
+                  {r.invested >= 0 ? "" : "−"}{nf(Math.abs(r.invested))}
+                </div>
+                <div className="text-right" style={{ color: (r.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {(r.valueDelta || 0) >= 0 ? "+" : ""}{nf(r.valueDelta)}
+                </div>
+                <div className="text-right font-bold" style={{ color: (r.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {(r.pnl || 0) >= 0 ? "+" : ""}{nf(r.pnl)}
+                </div>
+                <div className="text-right font-bold" style={{ color: (r.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {r.retPct == null ? "—" : pf(r.retPct)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
         <div className="text-xs mb-2" style={{ color: COLORS.sub }}>資產高點</div>
