@@ -1122,28 +1122,33 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
       {yearlyStats.length > 0 && (
         <Panel title="年度績效（粗估）">
           <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
-            以各年最後一筆每日紀錄（台股+美股）計算，公式同月度：損益 ≈ 市值Δ − 淨投入。
+            以各年最後一筆每日紀錄（台股+美股）計算：損益 ≈ 市值Δ − 淨投入（成本Δ）。
+            * 表示該年成本資料不完整，損益暫等於市值Δ（可能含新投入）。
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
+            <div>年份</div>
+            <div className="text-right">淨投入</div>
+            <div className="text-right">市值Δ</div>
+            <div className="text-right">損益</div>
+            <div className="text-right">報酬%</div>
+          </div>
+          <div className="space-y-1 max-h-48 overflow-y-auto">
             {yearlyStats.map((y) => (
-              <div key={y.year} className="rounded-xl p-3"
+              <div key={y.year}
+                className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
                 style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                <div className="text-[11px] font-bold" style={{ color: COLORS.gold }}>
-                  {y.year}{y.approximate ? " *" : ""}
+                <div>{y.year}{y.approximate ? " *" : ""}</div>
+                <div className="text-right" style={{ color: COLORS.sub }}>
+                  {y.invested == null ? "—" : `${y.invested >= 0 ? "" : "−"}${nf(Math.abs(y.invested))}`}
                 </div>
-                <div className="text-lg font-bold mono mt-1"
-                  style={{ color: (y.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                <div className="text-right" style={{ color: (y.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {(y.valueDelta || 0) >= 0 ? "+" : ""}{nf(y.valueDelta)}
+                </div>
+                <div className="text-right font-bold" style={{ color: (y.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
                   {(y.pnl || 0) >= 0 ? "+" : ""}{nf(y.pnl)}
                 </div>
-                <div className="text-xs mono mt-0.5"
-                  style={{ color: (y.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                <div className="text-right font-bold" style={{ color: (y.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
                   {pf(y.retPct)}
-                </div>
-                <div className="text-[10px] mono mt-1.5 space-y-0.5" style={{ color: COLORS.sub }}>
-                  <div>市值Δ {(y.valueDelta || 0) >= 0 ? "+" : ""}{nf(y.valueDelta)}</div>
-                  <div>
-                    淨投入 {y.invested == null ? "—" : `${y.invested >= 0 ? "+" : ""}${nf(y.invested)}`}
-                  </div>
                 </div>
               </div>
             ))}
