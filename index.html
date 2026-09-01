@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.2";
+const APP_VERSION = "4.6-personal-v2.3";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -935,10 +935,37 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
 }
 
 // ---------------- Dashboard ----------------
+// Range options for the asset-curve chart. "days: null" means show
+// everything. Kept outside the component so the array identity is stable
+// across renders (used as a dependency below).
+const CHART_RANGES = [
+  { id: "1m", label: "1個月", days: 30 },
+  { id: "3m", label: "3個月", days: 90 },
+  { id: "1y", label: "1年", days: 365 },
+  { id: "all", label: "全部", days: null },
+];
+
 function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, totalDividends,
   totalReturn, totalReturnPct, highPoint, drawdown, chartData, goal, totalInvested, holdings,
   onFillDailyTw }) {
   const up = dailyChange >= 0;
+  // Defaults to "1年" rather than "全部": with 3+ sparse years plotted
+  // proportionally to real time (see pickEvenTimeTicks above), the last
+  // few months of daily-tracked detail — the part most people check day to
+  // day — get compressed into a thin sliver on the full-history view. A
+  // shorter default window shows that recent detail first; "全部" is one
+  // tap away for anyone who wants the long-term shape.
+  const [chartRangeId, setChartRangeId] = useState("1y");
+  const rangedChartData = useMemo(() => {
+    const range = CHART_RANGES.find((r) => r.id === chartRangeId) || CHART_RANGES[CHART_RANGES.length - 1];
+    if (!range.days || chartData.length === 0) return chartData;
+    const cutoff = chartData[chartData.length - 1].t - range.days * 24 * 60 * 60 * 1000;
+    const filtered = chartData.filter((d) => d.t >= cutoff);
+    // If the chosen window is shorter than the data actually goes back
+    // (e.g. "1個月" on a brand-new tracker), fall back to everything rather
+    // than showing a near-empty chart.
+    return filtered.length > 1 ? filtered : chartData;
+  }, [chartData, chartRangeId]);
   return (
     <div className="space-y-4">
       <div className="rounded-2xl p-4" style={{
@@ -961,14 +988,32 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
           background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`,
           boxShadow: "0 4px 16px rgba(0,0,0,0.28)",
         }}>
-          <div className="text-xs mb-2" style={{ color: COLORS.sub }}>資產曲線</div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs" style={{ color: COLORS.sub }}>資產曲線</div>
+            <div className="flex gap-1">
+              {CHART_RANGES.map((r) => {
+                const active = chartRangeId === r.id;
+                return (
+                  <button key={r.id} onClick={() => setChartRangeId(r.id)}
+                    className="rounded-lg px-2 py-1 text-[10px] font-bold"
+                    style={{
+                      background: active ? COLORS.gold : COLORS.bg,
+                      color: active ? "#0A0F1C" : COLORS.sub,
+                      border: `1px solid ${active ? COLORS.gold : COLORS.panelBorder}`,
+                    }}>
+                    {r.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div style={{ height: 180 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <LineChart data={rangedChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke={COLORS.panelBorder} strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]}
                   tick={{ fontSize: 9, fill: COLORS.sub }}
-                  ticks={pickEvenTimeTicks(chartData, "t", 6)} tickFormatter={formatTickDate} />
+                  ticks={pickEvenTimeTicks(rangedChartData, "t", 6)} tickFormatter={formatTickDate} />
                 <YAxis tick={{ fontSize: 9, fill: COLORS.sub }}
                   tickFormatter={(v) => `${(v / 10000).toFixed(0)}萬`} width={44} />
                 <Tooltip
