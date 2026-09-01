@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.1";
+const APP_VERSION = "4.6-personal-v2.2";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -136,31 +136,38 @@ const todayStr = () => {
 };
 const nf = (n) => (n ?? 0).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
 
-// Recharts' interval="preserveStartEnd" spaces ticks evenly by ARRAY INDEX,
-// not by actual date. That's fine when data points are evenly spaced in time,
-// but this app's history mixes a few sparse early snapshots (2021-2024) with
-// dense near-daily records (2025-2026) — index-based spacing then crams every
-// visible tick into the dense recent stretch, making years of real history
-// invisible on the axis. This picks ticks evenly across the actual time span
-// instead, snapping each target time to the nearest real data point so the
-// returned values still exist in the chart's data (XAxis needs an exact match
-// to render a tick for a categorical dataKey like our date strings).
-function pickTimeBasedTicks(data, dateKey, count = 6) {
+// A categorical XAxis (dataKey pointing at a string) spaces every point
+// evenly by ARRAY INDEX, never by real elapsed time. That's invisible when
+// records are evenly spaced, but this app's history mixes a handful of
+// sparse quarterly snapshots (2021-2024) with dense near-daily records
+// (2025-2026): ~14 old points vs ~80 recent ones. Index-spacing squeezes
+// those 3+ sparse years into a sliver near the left edge and stretches the
+// last ~14 months across almost the entire chart — years of real history
+// look "short", and the line connecting the sparse old points draws a fake
+// smooth ramp that isn't really there. Picking better tick *labels* (the
+// previous fix here) can't correct this: labels just get relabeled at
+// whatever index position their date happens to fall on.
+// The real fix is a numeric time-scaled axis: chartData now carries a "t"
+// timestamp, the XAxis uses type="number" with a dataMin/dataMax domain, so
+// pixel position is proportional to actual elapsed time. pickEvenTimeTicks
+// just returns evenly spaced timestamps to label — no snapping to existing
+// data needed, since a continuous numeric axis can place a tick anywhere.
+function pickEvenTimeTicks(data, key, count = 6) {
   if (!data || data.length === 0) return [];
-  const times = data.map((d) => new Date(d[dateKey]).getTime());
-  const minT = times[0], maxT = times[times.length - 1];
-  if (minT === maxT) return [data[0][dateKey]];
-  const picked = [];
+  const minT = data[0][key], maxT = data[data.length - 1][key];
+  if (minT === maxT) return [minT];
+  const ticks = [];
   for (let i = 0; i < count; i++) {
-    const target = minT + ((maxT - minT) * i) / (count - 1);
-    let bestIdx = 0, bestDiff = Infinity;
-    for (let j = 0; j < times.length; j++) {
-      const diff = Math.abs(times[j] - target);
-      if (diff < bestDiff) { bestDiff = diff; bestIdx = j; }
-    }
-    picked.push(data[bestIdx][dateKey]);
+    ticks.push(Math.round(minT + ((maxT - minT) * i) / (count - 1)));
   }
-  return [...new Set(picked)];
+  return ticks;
+}
+function formatTickDate(t) {
+  const d = new Date(t);
+  const y = String(d.getFullYear()).slice(2);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
@@ -532,6 +539,7 @@ function AssetTracker() {
 
   const chartData = sortedDaily.map((r) => ({
     date: r.date.slice(2),
+    t: new Date(r.date).getTime(),
     total: r.twValue + r.usValue,
   }));
 
@@ -958,11 +966,13 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke={COLORS.panelBorder} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.sub }}
-                  ticks={pickTimeBasedTicks(chartData, "date", 6)} interval="preserveStartEnd" />
+                <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]}
+                  tick={{ fontSize: 9, fill: COLORS.sub }}
+                  ticks={pickEvenTimeTicks(chartData, "t", 6)} tickFormatter={formatTickDate} />
                 <YAxis tick={{ fontSize: 9, fill: COLORS.sub }}
                   tickFormatter={(v) => `${(v / 10000).toFixed(0)}萬`} width={44} />
                 <Tooltip
+                  labelFormatter={formatTickDate}
                   contentStyle={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}`, fontSize: 12 }}
                   formatter={(v) => [`NT$ ${nf(v)}`, "總資產"]} />
                 <ReferenceLine y={goal.targetAmount} stroke={COLORS.gold} strokeDasharray="4 4" />
