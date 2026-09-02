@@ -23,16 +23,6 @@
 
   <script>
     window.addEventListener("error", function(e) {
-      // A cross-origin script without a `crossorigin` attribute reports
-      // ANY internal error as a bare "Script error." with no filename,
-      // line number, or stack — that's a browser security limit, not a
-      // real diagnosis. Showing the fatal overlay for that tells the user
-      // nothing actionable and can hide an app that's actually fine
-      // underneath (e.g. a harmless quirk in a third-party CDN script).
-      // Only treat it as fatal when we have an actual message/location to
-      // show; log the content-free case instead of blocking the UI.
-      var hasRealInfo = (e.message && e.message !== "Script error.") || e.filename;
-      if (!hasRealInfo) { console.warn("Ignored content-free window error (likely a cross-origin script):", e); return; }
       var box=document.getElementById("boot-error");
       if(box) {
         box.style.display="block";
@@ -56,7 +46,6 @@
   <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
   <script src="https://unpkg.com/lucide-react@0.344.0/dist/umd/lucide-react.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 </head>
 <body>
@@ -113,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.10";
+const APP_VERSION = "4.6-personal-v2.8";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -493,109 +482,6 @@ function AssetTracker() {
     URL.revokeObjectURL(url);
   };
 
-  const exportExcel = () => {
-    const XLSX = window.XLSX;
-    if (!XLSX) {
-      window.alert("Excel 匯出元件尚未載入，請確認網路後重新整理再試一次。");
-      return;
-    }
-
-    const wb = XLSX.utils.book_new();
-
-    const dailyRows = [...dailyRecords]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map((r) => ({
-        日期: r.date,
-        台股市值: Number(r.twValue || 0),
-        美股市值: Number(r.usValue || 0),
-        總市值: Number(r.twValue || 0) + Number(r.usValue || 0),
-        台股成本: Number(r.twCost || 0),
-        美股成本: Number(r.usCost || 0),
-        總成本: Number(r.twCost || 0) + Number(r.usCost || 0),
-      }));
-
-    const tradeRows = [...trades]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map((t) => ({
-        日期: t.date,
-        代號: t.symbol,
-        買賣: t.action === "buy" ? "買" : "賣",
-        股數: Number(t.shares || 0),
-        成交價: Number(t.price || 0),
-        手續費: Number(t.fee || 0),
-        交易稅: Number(t.tax || 0),
-        交易金額: Number(t.amount || 0),
-        備註: t.note || "",
-      }));
-
-    const dividendRows = [...dividends]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map((d) => ({
-        除息日: d.date,
-        代號: d.symbol,
-        股數: Number(d.shares || 0),
-        每股配息: Number(d.perShare || 0),
-        配息總額: Number(d.amount || 0),
-      }));
-
-    const holdingRows = holdings.map((h) => {
-      const netShares = trades
-        .filter((t) => t.symbol === h.symbol)
-        .reduce((sum, t) => sum + (t.action === "buy" ? Number(t.shares || 0) : -Number(t.shares || 0)), 0);
-      const current = Number(h.initialShares || 0) + netShares;
-      const target = Number(h.target2035 || 0);
-      return {
-        代號: h.symbol,
-        名稱: h.name || "",
-        期初股數: Number(h.initialShares || 0),
-        目前股數: current,
-        2035目標股數: target,
-        尚缺股數: Math.max(0, target - current),
-        達成率: target > 0 ? current / target : 0,
-      };
-    });
-
-    const planRows = planItems.map((p) => ({
-      代號: p.symbol,
-      每月投入: Number(p.amount || 0),
-      備註: p.note || "",
-    }));
-
-    const summaryRows = [
-      { 項目: "匯出日期", 資料: todayStr() },
-      { 項目: "App版本", 資料: APP_VERSION },
-      { 項目: "退休目標金額", 資料: Number(goal.targetAmount || 0) },
-      { 項目: "退休目標年份", 資料: Number(goal.targetYear || 0) },
-      { 項目: "起始成本", 資料: Number(costBasis?.startingCost || 0) },
-      { 項目: "目前累積成本", 資料: Number(accumulatedCost || 0) },
-      { 項目: "累積配息", 資料: dividends.reduce((sum, d) => sum + Number(d.amount || 0), 0) },
-    ];
-
-    const addSheet = (name, rows, widths) => {
-      const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 資料: "尚無紀錄" }]);
-      if (widths) ws["!cols"] = widths.map((wch) => ({ wch }));
-      XLSX.utils.book_append_sheet(wb, ws, name);
-    };
-
-    addSheet("摘要", summaryRows, [20, 20]);
-    addSheet("每日紀錄", dailyRows, [12, 14, 14, 14, 14, 14, 14]);
-    addSheet("交易紀錄", tradeRows, [12, 10, 8, 10, 10, 10, 10, 14, 28]);
-    addSheet("配息紀錄", dividendRows, [12, 10, 12, 12, 14]);
-    addSheet("持股進度", holdingRows, [10, 18, 12, 12, 14, 12, 12]);
-    addSheet("計畫設定", planRows, [10, 14, 28]);
-
-    // 持股進度的達成率欄改成 Excel 百分比格式。
-    const holdingSheet = wb.Sheets["持股進度"];
-    if (holdingSheet && holdingRows.length) {
-      for (let row = 2; row <= holdingRows.length + 1; row++) {
-        const cell = holdingSheet[`G${row}`];
-        if (cell) cell.z = "0.0%";
-      }
-    }
-
-    XLSX.writeFile(wb, `存股資產追蹤_${todayStr()}.xlsx`);
-  };
-
   const importBackup = async (file) => {
     if (!file) return;
     try {
@@ -798,7 +684,7 @@ function AssetTracker() {
         {tab === "plan" && (
           <PlanPanel planItems={planItems} setPlanItems={setPlanItems}
             planTotal={planTotal} goal={goal} setGoal={setGoal}
-            exportBackup={exportBackup} importBackup={importBackup} exportExcel={exportExcel} />
+            exportBackup={exportBackup} importBackup={importBackup} />
         )}
         {tab === "progress" && (
           <ProgressPanel
@@ -1758,7 +1644,7 @@ function DividendsPanel({ dividends, setDividends, holdings }) {
 }
 
 // ---------------- Plan Panel ----------------
-function PlanPanel({ planItems, setPlanItems, planTotal, goal, setGoal, exportBackup, importBackup, exportExcel }) {
+function PlanPanel({ planItems, setPlanItems, planTotal, goal, setGoal, exportBackup, importBackup }) {
   const [form, setForm] = useState({ symbol: "", amount: "", note: "" });
   const add = () => {
     if (!form.symbol || !form.amount) return;
@@ -1812,18 +1698,18 @@ function PlanPanel({ planItems, setPlanItems, planTotal, goal, setGoal, exportBa
           style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
           <ShieldCheck size={18} style={{ color: COLORS.gold, flex: "0 0 auto", marginTop: 1 }} />
           <div className="text-[11px] leading-5" style={{ color: COLORS.sub }}>
-            JSON 用來完整備份／還原 App；Excel 用來保存、檢視與分析投資歷史。重要修改後建議兩種都留一份。
+            建議重要修改後匯出一次 JSON 備份。重新部署、換手機或瀏覽器資料被清除時，可直接匯入還原。
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-2 mt-3">
+        <div className="grid grid-cols-2 gap-2 mt-3">
           <button onClick={exportBackup}
-            className="rounded-xl py-2.5 text-[11px] font-bold flex items-center justify-center gap-1"
+            className="rounded-xl py-2.5 text-xs font-bold flex items-center justify-center gap-1.5"
             style={{ background: COLORS.gold, color: COLORS.bg }}>
-            <Download size={14} /> JSON備份
+            <Download size={15} /> 匯出備份
           </button>
-          <label className="rounded-xl py-2.5 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+          <label className="rounded-xl py-2.5 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
             style={{ background: COLORS.bg, color: COLORS.gold, border: `1px solid ${COLORS.gold}` }}>
-            <Upload size={14} /> JSON還原
+            <Upload size={15} /> 匯入還原
             <input type="file" accept="application/json,.json" className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -1831,11 +1717,6 @@ function PlanPanel({ planItems, setPlanItems, planTotal, goal, setGoal, exportBa
                 e.target.value = "";
               }} />
           </label>
-          <button onClick={exportExcel}
-            className="rounded-xl py-2.5 text-[11px] font-bold flex items-center justify-center gap-1"
-            style={{ background: COLORS.bg, color: COLORS.gold, border: `1px solid ${COLORS.gold}` }}>
-            <Download size={14} /> 匯出Excel
-          </button>
         </div>
       </Panel>
     </div>
