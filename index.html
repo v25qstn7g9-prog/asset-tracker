@@ -46,7 +46,6 @@
   <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
   <script src="https://unpkg.com/lucide-react@0.344.0/dist/umd/lucide-react.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 </head>
 <body>
@@ -103,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.11";
+const APP_VERSION = "4.6-personal-v2.12";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -172,6 +171,27 @@ function formatTickDate(t) {
 }
 
 const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
+
+// Lazily injects the SheetJS (xlsx) library the first time Excel export is
+// actually used, instead of loading it eagerly on every page load. This
+// keeps a large third-party script fully off the critical boot path — if
+// it fails to load for any reason, only the Excel button is affected, not
+// the rest of the app. Cached at module scope (not component state) so a
+// second click reuses the same in-flight/completed load instead of
+// injecting the script tag again.
+let xlsxLoadPromise = null;
+function loadXLSXLibrary() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (xlsxLoadPromise) return xlsxLoadPromise;
+  xlsxLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+    script.onload = () => (window.XLSX ? resolve(window.XLSX) : reject(new Error("XLSX 載入後仍無法使用")));
+    script.onerror = () => reject(new Error("XLSX 函式庫載入失敗，請確認網路連線"));
+    document.head.appendChild(script);
+  }).catch((err) => { xlsxLoadPromise = null; throw err; }); // allow retry on next click if it failed
+  return xlsxLoadPromise;
+}
 
 // Animates a number counting up/down to its new value instead of jumping
 // instantly — used for the big "目前總資產" figure so a live-price refresh
@@ -483,10 +503,12 @@ function AssetTracker() {
     URL.revokeObjectURL(url);
   };
 
-  const exportExcel = () => {
-    const XLSX = window.XLSX;
-    if (!XLSX) {
-      window.alert("Excel 匯出元件尚未載入，請確認網路後重新整理再試一次。");
+  const exportExcel = async () => {
+    let XLSX;
+    try {
+      XLSX = await loadXLSXLibrary();
+    } catch (e) {
+      window.alert("Excel 匯出元件載入失敗，請確認網路後再試一次。");
       return;
     }
 
@@ -811,7 +833,7 @@ function Header({ goal, totalToday, goalDate }) {
   const remain = Math.max(0, goal.targetAmount - totalToday);
   const pct = Math.min(100, (totalToday / goal.targetAmount) * 100);
   return (
-    <div style={{ borderBottom: `1px solid ${COLORS.panelBorder}`, paddingTop: `env(safe-area-inset-top)` }} className="px-4 pb-3">
+    <div style={{ borderBottom: `1px solid ${COLORS.panelBorder}` }} className="px-4 pt-5 pb-3">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-baseline justify-between">
           <h1 className="text-lg font-black tracking-tight" style={{ color: COLORS.gold }}>
