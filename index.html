@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.2";
+const APP_VERSION = "4.6-personal-v2.7";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -135,6 +135,41 @@ const todayStr = () => {
   return `${y}-${m}-${day}`;
 };
 const nf = (n) => (n ?? 0).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+
+// A categorical XAxis (dataKey pointing at a string) spaces every point
+// evenly by ARRAY INDEX, never by real elapsed time. That's invisible when
+// records are evenly spaced, but this app's history mixes a handful of
+// sparse quarterly snapshots (2021-2024) with dense near-daily records
+// (2025-2026): ~14 old points vs ~80 recent ones. Index-spacing squeezes
+// those 3+ sparse years into a sliver near the left edge and stretches the
+// last ~14 months across almost the entire chart — years of real history
+// look "short", and the line connecting the sparse old points draws a fake
+// smooth ramp that isn't really there. Picking better tick *labels* (the
+// previous fix here) can't correct this: labels just get relabeled at
+// whatever index position their date happens to fall on.
+// The real fix is a numeric time-scaled axis: chartData now carries a "t"
+// timestamp, the XAxis uses type="number" with a dataMin/dataMax domain, so
+// pixel position is proportional to actual elapsed time. pickEvenTimeTicks
+// just returns evenly spaced timestamps to label — no snapping to existing
+// data needed, since a continuous numeric axis can place a tick anywhere.
+function pickEvenTimeTicks(data, key, count = 6) {
+  if (!data || data.length === 0) return [];
+  const minT = data[0][key], maxT = data[data.length - 1][key];
+  if (minT === maxT) return [minT];
+  const ticks = [];
+  for (let i = 0; i < count; i++) {
+    ticks.push(Math.round(minT + ((maxT - minT) * i) / (count - 1)));
+  }
+  return ticks;
+}
+function formatTickDate(t) {
+  const d = new Date(t);
+  const y = String(d.getFullYear()).slice(2);
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
 // Animates a number counting up/down to its new value instead of jumping
@@ -505,8 +540,26 @@ function AssetTracker() {
 
   const chartData = sortedDaily.map((r) => ({
     date: r.date.slice(2),
+    t: new Date(r.date).getTime(),
     total: r.twValue + r.usValue,
   }));
+
+  // "今年以來(YTD)" — market-value change since the start of the current
+  // calendar year. Like the other stat cards, this is value-based, not a
+  // cost-adjusted/time-weighted return: it doesn't separate new
+  // contributions from investment gains. Baseline is the last record on or
+  // before Jan 1 of this year; if tracking only started sometime this year,
+  // falls back to the very first record so the number stays meaningful.
+  const ytdBase = (() => {
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
+    let base = null;
+    for (let i = chartData.length - 1; i >= 0; i--) {
+      if (chartData[i].t <= yearStart) { base = chartData[i]; break; }
+    }
+    return base || chartData[0] || null;
+  })();
+  const ytdGain = ytdBase ? totalToday - ytdBase.total : 0;
+  const ytdPct = ytdBase && ytdBase.total ? (ytdGain / ytdBase.total) * 100 : 0;
 
   const holdingsWithShares = useMemo(() => holdings.map((h) => {
     const bought = trades.filter((t) => t.symbol === h.symbol && t.action === "buy")
@@ -606,6 +659,7 @@ function AssetTracker() {
             totalToday={totalToday} dailyChange={dailyChange} dailyChangePct={dailyChangePct}
             capitalGain={capitalGain} totalDividends={totalDividends} totalReturn={totalReturn}
             totalReturnPct={totalReturnPct} highPoint={highPoint} drawdown={drawdown}
+            ytdGain={ytdGain} ytdPct={ytdPct}
             chartData={chartData} goal={goal} totalInvested={totalInvested}
             holdings={holdingsWithShares}
             onFillDailyTw={(value) => { setDailyPrefill({ twValue: value, nonce: Date.now() }); setTab("daily"); }}
@@ -900,10 +954,37 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
 }
 
 // ---------------- Dashboard ----------------
+// Range options for the asset-curve chart. "days: null" means show
+// everything. Kept outside the component so the array identity is stable
+// across renders (used as a dependency below).
+const CHART_RANGES = [
+  { id: "1m", label: "1個月", days: 30 },
+  { id: "3m", label: "3個月", days: 90 },
+  { id: "1y", label: "1年", days: 365 },
+  { id: "all", label: "全部", days: null },
+];
+
 function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, totalDividends,
-  totalReturn, totalReturnPct, highPoint, drawdown, chartData, goal, totalInvested, holdings,
+  totalReturn, totalReturnPct, highPoint, drawdown, ytdGain, ytdPct, chartData, goal, totalInvested, holdings,
   onFillDailyTw }) {
   const up = dailyChange >= 0;
+  // Defaults to "1年" rather than "全部": with 3+ sparse years plotted
+  // proportionally to real time (see pickEvenTimeTicks above), the last
+  // few months of daily-tracked detail — the part most people check day to
+  // day — get compressed into a thin sliver on the full-history view. A
+  // shorter default window shows that recent detail first; "全部" is one
+  // tap away for anyone who wants the long-term shape.
+  const [chartRangeId, setChartRangeId] = useState("1y");
+  const rangedChartData = useMemo(() => {
+    const range = CHART_RANGES.find((r) => r.id === chartRangeId) || CHART_RANGES[CHART_RANGES.length - 1];
+    if (!range.days || chartData.length === 0) return chartData;
+    const cutoff = chartData[chartData.length - 1].t - range.days * 24 * 60 * 60 * 1000;
+    const filtered = chartData.filter((d) => d.t >= cutoff);
+    // If the chosen window is shorter than the data actually goes back
+    // (e.g. "1個月" on a brand-new tracker), fall back to everything rather
+    // than showing a near-empty chart.
+    return filtered.length > 1 ? filtered : chartData;
+  }, [chartData, chartRangeId]);
   return (
     <div className="space-y-4">
       <div className="rounded-2xl p-4" style={{
@@ -922,7 +1003,48 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
       <LivePricePanel holdings={holdings} onFillDailyTw={onFillDailyTw} />
 
       {chartData.length > 1 && (
-        <ChartPanel chartData={chartData} goal={goal} />
+        <div className="rounded-2xl p-4" style={{
+          background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.28)",
+        }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs" style={{ color: COLORS.sub }}>資產曲線</div>
+            <div className="flex gap-1">
+              {CHART_RANGES.map((r) => {
+                const active = chartRangeId === r.id;
+                return (
+                  <button key={r.id} onClick={() => setChartRangeId(r.id)}
+                    className="rounded-lg px-2 py-1 text-[10px] font-bold"
+                    style={{
+                      background: active ? COLORS.gold : COLORS.bg,
+                      color: active ? "#0A0F1C" : COLORS.sub,
+                      border: `1px solid ${active ? COLORS.gold : COLORS.panelBorder}`,
+                    }}>
+                    {r.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ height: 180 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={rangedChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke={COLORS.panelBorder} strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]}
+                  tick={{ fontSize: 9, fill: COLORS.sub }}
+                  ticks={pickEvenTimeTicks(rangedChartData, "t", 6)} tickFormatter={formatTickDate} />
+                <YAxis tick={{ fontSize: 9, fill: COLORS.sub }}
+                  tickFormatter={(v) => `${(v / 10000).toFixed(0)}萬`} width={44} />
+                <Tooltip
+                  labelFormatter={formatTickDate}
+                  contentStyle={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}`, fontSize: 12 }}
+                  formatter={(v) => [`NT$ ${nf(v)}`, "總資產"]} />
+                <ReferenceLine y={goal.targetAmount} stroke={COLORS.gold} strokeDasharray="4 4" />
+                <Line type="monotone" dataKey="total" stroke={COLORS.gold} strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
       )}
 
       <div className="grid grid-cols-2 gap-3">
@@ -930,6 +1052,7 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
         <StatCard label="累積股息" value={`NT$ ${nf(totalDividends)}`} tone="gold" />
         <StatCard label="粗估總報酬" value={`NT$ ${nf(totalReturn)}`} tone={totalReturn >= 0 ? "gain" : "loss"} />
         <StatCard label="粗估報酬率" value={pf(totalReturnPct)} tone={totalReturnPct >= 0 ? "gain" : "loss"} />
+        <StatCard label="今年以來(YTD)" value={`${nf(ytdGain)}（${pf(ytdPct)}）`} tone={ytdGain >= 0 ? "gain" : "loss"} className="col-span-2" />
       </div>
       <div className="text-[11px] px-1" style={{ color: COLORS.sub }}>
         註：目前成本來自券商/每日紀錄的持倉成本；若曾賣出、換股或用股息再投入，
@@ -955,72 +1078,10 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
   );
 }
 
-function ChartPanel({ chartData, goal }) {
-  const [range, setRange] = useState("all"); // 1m | 3m | 1y | all
-  const ranges = [
-    { id: "1m", label: "1個月" },
-    { id: "3m", label: "3個月" },
-    { id: "1y", label: "1年" },
-    { id: "all", label: "全部" },
-  ];
-  const filtered = useMemo(() => {
-    if (!chartData.length || range === "all") return chartData;
-    // chartData.date is like "25-09-26" (slice(2) of YYYY-MM-DD)
-    const last = chartData[chartData.length - 1];
-    const lastFull = "20" + last.date; // restore YYYY-MM-DD
-    const end = parseLocalDate(lastFull);
-    const start = new Date(end);
-    if (range === "1m") start.setMonth(start.getMonth() - 1);
-    else if (range === "3m") start.setMonth(start.getMonth() - 3);
-    else if (range === "1y") start.setFullYear(start.getFullYear() - 1);
-    const startStr = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
-    return chartData.filter((r) => ("20" + r.date) >= startStr);
-  }, [chartData, range]);
-
-  return (
-    <div className="rounded-2xl p-4" style={{
-      background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.28)",
-    }}>
-      <div className="flex items-center justify-between mb-2 gap-2">
-        <div className="text-xs" style={{ color: COLORS.sub }}>資產曲線</div>
-        <div className="flex gap-1">
-          {ranges.map((r) => (
-            <button key={r.id} onClick={() => setRange(r.id)}
-              className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-              style={{
-                background: range === r.id ? COLORS.gold : COLORS.bg,
-                color: range === r.id ? COLORS.bg : COLORS.sub,
-                border: `1px solid ${range === r.id ? COLORS.gold : COLORS.panelBorder}`,
-              }}>
-              {r.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div style={{ height: 180 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={filtered} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-            <CartesianGrid stroke={COLORS.panelBorder} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="date" tick={{ fontSize: 9, fill: COLORS.sub }} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 9, fill: COLORS.sub }}
-              tickFormatter={(v) => `${(v / 10000).toFixed(0)}萬`} width={44} />
-            <Tooltip
-              contentStyle={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}`, fontSize: 12 }}
-              formatter={(v) => [`NT$ ${nf(v)}`, "總資產"]} />
-            <ReferenceLine y={goal.targetAmount} stroke={COLORS.gold} strokeDasharray="4 4" />
-            <Line type="monotone" dataKey="total" stroke={COLORS.gold} strokeWidth={2} dot={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value, tone }) {
+function StatCard({ label, value, tone, className = "" }) {
   const color = tone === "gain" ? COLORS.gain : tone === "loss" ? COLORS.loss : tone === "gold" ? COLORS.gold : COLORS.text;
   return (
-    <div className="rounded-2xl p-4" style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
+    <div className={`rounded-2xl p-4 ${className}`} style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}` }}>
       <div className="text-xs" style={{ color: COLORS.sub }}>{label}</div>
       <div className="text-lg font-bold mono mt-1" style={{ color }}>{value}</div>
     </div>
@@ -1103,6 +1164,38 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
     monthlyStats[mk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
   });
 
+  // Yearly summary: same market-return / contribution split as monthly
+  // above, just grouped by year instead of month. Reuses the exact same
+  // logic (and the same "no cost data on one side" fallback) so the
+  // numbers here are directly comparable to the monthly breakdown.
+  const yearlyStats = {};
+  const yearKey = (d) => d.slice(0, 4); // "YYYY"
+  let lastSeenPerYear = {};
+  records.forEach((r) => { lastSeenPerYear[yearKey(r.date)] = r; });
+  const yearKeys = Object.keys(lastSeenPerYear).sort();
+  yearKeys.forEach((yk, i) => {
+    const endRec = lastSeenPerYear[yk];
+    const endValue = endRec.twValue + endRec.usValue;
+    const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
+    const prevYk = i > 0 ? yearKeys[i - 1] : null;
+    if (!prevYk) { yearlyStats[yk] = null; return; }
+    const startRec = lastSeenPerYear[prevYk];
+    const startValue = startRec.twValue + startRec.usValue;
+    const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
+    const hasCostBothEnds = startCost > 0 && endCost > 0;
+    let marketReturn, pct, contribution;
+    if (hasCostBothEnds) {
+      marketReturn = (endValue - endCost) - (startValue - startCost);
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = endCost - startCost;
+    } else {
+      marketReturn = endValue - startValue;
+      pct = startValue ? (marketReturn / startValue) * 100 : 0;
+      contribution = null;
+    }
+    yearlyStats[yk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
+  });
+
   return (
     <div className="space-y-4">
       <Panel title="新增每日紀錄">
@@ -1126,6 +1219,41 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         </div>
         <AddButton onClick={add} label="儲存紀錄" />
       </Panel>
+
+      {yearKeys.length > 0 && (
+        <Panel title="年度損益">
+          {yearKeys.some((yk) => yearlyStats[yk]?.approximate) && (
+            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
+              * 成本資料不完整的年份，市場報酬與新增投入無法精準拆分，數字為粗估
+            </div>
+          )}
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {[...yearKeys].reverse().map((yk) => {
+              const stat = yearlyStats[yk];
+              return (
+                <div key={yk} className="rounded-lg px-3 py-2 text-xs mono"
+                  style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                  <div className="flex justify-between items-baseline">
+                    <span style={{ color: COLORS.sub }}>{yk}{stat?.approximate ? " *" : ""}</span>
+                    {stat ? (
+                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
+                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                      </span>
+                    ) : (
+                      <span style={{ color: COLORS.sub }}>最早紀錄，無前年可比較</span>
+                    )}
+                  </div>
+                  {stat && stat.contribution != null && stat.contribution !== 0 && (
+                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
+                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
 
       {monthKeys.length > 0 && (
         <Panel title="月度損益">
