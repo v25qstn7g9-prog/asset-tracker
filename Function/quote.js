@@ -1,5 +1,5 @@
 /**
- * quote.js — 4.6-quote-stable-5
+ * quote.js — 4.6-quote-stable-7
  *
  * Stability strategy for 漲跌幅:
  * 1. TWSE `y` is the only accepted prevClose (matches brokers).
@@ -9,12 +9,15 @@
  * 4. Retry TWSE once; optional per-symbol fallback if batch is partial.
  * 5. ?debug=1 surfaces raw TWSE fields + which fallback path was used, for
  *    troubleshooting a mismatch against a broker without guessing.
- * 6. TWSE timeouts shortened + no pointless retry on a hard HTTP error
+ * 6. TWSE timeout shortened + no pointless retry on a hard HTTP error
  *    response (retrying the identical request 250ms later rarely changes
  *    a real "520" answer) — cuts worst-case latency when TWSE is failing.
+ *    Yahoo's timeout is intentionally NOT shortened (see stable-7): it's
+ *    the only fallback once TWSE fails, so a short timeout there converts
+ *    "Yahoo was a bit slow" into "this symbol has no price at all".
  */
 const SYMBOL_PATTERN = /^[0-9]{4,6}[A-Z]?$/;
-const QUOTE_VERSION = "4.6-quote-stable-6";
+const QUOTE_VERSION = "4.6-quote-stable-7";
 
 function isAllowedSymbol(s) {
   return SYMBOL_PATTERN.test(s);
@@ -168,10 +171,11 @@ async function fetchTwseWithRetry(symbols, debug = false) {
 async function fetchYahooPrice(symbol) {
   const yahooSymbol = `${symbol}.TW`;
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=5d&_ts=${Date.now()}`;
-  // This only runs once TWSE has already failed, so it's pure added wait
-  // on top — keep it shorter than the old 6500ms for the same reason as
-  // the TWSE timeout above.
-  const data = await fetchJson(url, 4000);
+  // Yahoo is the *only* fallback once TWSE has failed, so unlike TWSE's
+  // timeout above, cutting this one short trades a rare slow response for
+  // a much worse outcome: the whole symbol falls back to a stale cached
+  // price with a "fetch failed" banner. Keep this generous.
+  const data = await fetchJson(url, 6500);
   const result = data?.chart?.result?.[0];
   if (!result) throw new Error("Yahoo no result");
   const meta = result.meta || {};
