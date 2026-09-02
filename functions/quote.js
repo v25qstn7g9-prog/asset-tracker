@@ -96,7 +96,7 @@ async function getTwseSessionCookie() {
   }
 }
 
-async function fetchTwse(symbols) {
+async function fetchTwse(symbols, debug = false) {
   const cookie = await getTwseSessionCookie();
   const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_ts=${Date.now()}`;
@@ -171,11 +171,31 @@ async function fetchTwse(symbols) {
       source: "TWSE",
       priceSource, // debug: last | mid | ask | bid | open | prev
     };
+    // Raw fields from TWSE, only when ?debug=1 is passed — kept out of the
+    // normal response to avoid bloating every request. When the app's
+    // displayed 漲跌幅 doesn't match a broker's at the same moment, this is
+    // what actually lets us tell apart "our current price is lagging" (raw
+    // y agrees with the broker's implied prevClose, only z/tick is behind)
+    // from "the prevClose itself is wrong" (raw y disagrees) — reasoning
+    // backward from price+pct alone can't distinguish the two.
+    if (debug) {
+      quotes[symbol].debug = {
+        rawY: item.y, rawZ: item.z, rawTlong: item.tlong,
+        rawA: item.a, rawB: item.b, rawO: item.o, rawEx: item.ex, rawN: item.n,
+      };
+    }
   }
   return quotes;
 }
 
-async function fetchYahoo(symbol) {
+// Converts a Unix timestamp (seconds) to a "YYYY-MM-DD" string in Taipei
+// time (UTC+8, no DST) — used to match daily bars to real trading dates.
+function taipeiDateStr(unixSeconds) {
+  const d = new Date((unixSeconds + 8 * 3600) * 1000);
+  return d.toISOString().slice(0, 10);
+}
+
+async function fetchYahoo(symbol, debug = false) {
   const yahooSymbol = `${symbol}.TW`;
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=5d&_ts=${Date.now()}`;
   const { data } = await fetchJson(url, 6500);
@@ -183,35 +203,46 @@ async function fetchYahoo(symbol) {
   if (!result) throw new Error("Yahoo no result");
 
   const meta = result.meta || {};
-  // Prefer official meta fields over daily close bars (bars can be adjusted
-  // or pick the wrong session, which breaks 漲跌幅 vs brokers).
-  let price = Number(meta.regularMarketPrice);
-  let prevClose = Number(meta.regularMarketPreviousClose);
+  const timestamps = Array.isArray(result.timestamp) ? result.timestamp : [];
+  const closes = result.indicators?.quote?.[0]?.close || [];
 
-  if (!Number.isFinite(price) || !Number.isFinite(prevClose)) {
-    const closes = result.indicators?.quote?.[0]?.close || [];
-    let lastIdx = -1;
-    for (let i = closes.length - 1; i >= 0; i--) {
-      if (closes[i] != null && Number.isFinite(Number(closes[i]))) {
-        lastIdx = i;
-        break;
-      }
+  // Debug evidence (2026-09-02, 0050/0056) showed meta.regularMarketPreviousClose
+  // can be a full trading day stale for TW ETFs — it matched the close from
+  // two days back instead of yesterday — while the daily bars array itself
+  // was fine. meta stayed correct for 2330 in the same request, so this
+  // isn't a blanket Yahoo outage, just an unreliable field for some TW
+  // tickers. Bars anchored to real calendar dates aren't guessable in the
+  // same way a cached meta field can be, so derive price/prevClose from the
+  // bars first and only fall back to meta when the bars don't have enough
+  // history to do that.
+  let price = null, prevClose = null;
+  if (timestamps.length && closes.length === timestamps.length) {
+    const today = taipeiDateStr(Math.floor(Date.now() / 1000));
+    let todayIdx = -1;
+    for (let i = timestamps.length - 1; i >= 0; i--) {
+      if (taipeiDateStr(timestamps[i]) === today) { todayIdx = i; break; }
     }
-    if (lastIdx < 0) throw new Error("Yahoo no price");
-    if (!Number.isFinite(price)) price = Number(closes[lastIdx]);
-    if (!Number.isFinite(prevClose)) {
-      let prevIdx = -1;
-      for (let i = lastIdx - 1; i >= 0; i--) {
-        if (closes[i] != null && Number.isFinite(Number(closes[i]))) {
-          prevIdx = i;
-          break;
-        }
-      }
-      prevClose = prevIdx >= 0
-        ? Number(closes[prevIdx])
-        : Number(meta.chartPreviousClose ?? price);
+    // If today's bar exists and has a live price, that's "today" — walk
+    // backward from it for the last COMPLETED prior day's close. If it's
+    // not there yet (e.g. before the first tick of the day), the most
+    // recent bar in the array is still the last completed close, so both
+    // "current" and "previous" shift back by one.
+    const priceIdx = todayIdx >= 0 && closes[todayIdx] != null ? todayIdx : timestamps.length - 1;
+    let prevIdx = -1;
+    for (let i = priceIdx - 1; i >= 0; i--) {
+      if (closes[i] != null && Number.isFinite(Number(closes[i]))) { prevIdx = i; break; }
     }
+    if (closes[priceIdx] != null && Number.isFinite(Number(closes[priceIdx]))) {
+      price = Number(closes[priceIdx]);
+    }
+    if (prevIdx >= 0) prevClose = Number(closes[prevIdx]);
   }
+
+  // Fall back to meta fields only when the bars didn't yield a usable pair
+  // — e.g. a very new listing with under 2 days of history.
+  if (!Number.isFinite(price)) price = Number(meta.regularMarketPrice);
+  if (!Number.isFinite(prevClose)) prevClose = Number(meta.regularMarketPreviousClose ?? meta.chartPreviousClose);
+  if (!Number.isFinite(price)) throw new Error("Yahoo no price");
 
   const ts = Array.isArray(result.timestamp)
     ? result.timestamp[result.timestamp.length - 1]
@@ -223,6 +254,14 @@ async function fetchYahoo(symbol) {
     isStale: false,
     asOfDate: ts ? new Date(ts * 1000).toISOString() : null,
     source: "Yahoo",
+    ...(debug ? {
+      debug: {
+        metaRegularMarketPrice: meta.regularMarketPrice,
+        metaRegularMarketPreviousClose: meta.regularMarketPreviousClose,
+        metaChartPreviousClose: meta.chartPreviousClose,
+        barsUsed: timestamps.map((t, i) => ({ date: taipeiDateStr(t), close: closes[i] })),
+      },
+    } : {}),
   };
 }
 
@@ -236,12 +275,13 @@ export async function onRequestGet(context) {
 
     const symbols = [...new Set(requested)].filter(isAllowedSymbol);
     if (!symbols.length) return jsonResponse({ error: "沒有允許的股票代號" }, 400);
+    const debug = url.searchParams.get("debug") === "1";
 
     const quotes = {};
     const errors = [];
 
     try {
-      Object.assign(quotes, await fetchTwse(symbols));
+      Object.assign(quotes, await fetchTwse(symbols, debug));
     } catch (e) {
       errors.push(`TWSE: ${e?.message || e}`);
     }
@@ -249,7 +289,7 @@ export async function onRequestGet(context) {
     // Yahoo only for symbols TWSE completely missed
     const missing = symbols.filter((s) => !quotes[s]);
     if (missing.length) {
-      const results = await Promise.allSettled(missing.map(fetchYahoo));
+      const results = await Promise.allSettled(missing.map((s) => fetchYahoo(s, debug)));
       results.forEach((result, i) => {
         const symbol = missing[i];
         if (result.status === "fulfilled") quotes[symbol] = result.value;
