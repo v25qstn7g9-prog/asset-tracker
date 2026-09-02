@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.7";
+const APP_VERSION = "4.6-family-clean-v2";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -135,23 +135,19 @@ const todayStr = () => {
   return `${y}-${m}-${day}`;
 };
 const nf = (n) => (n ?? 0).toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
 // A categorical XAxis (dataKey pointing at a string) spaces every point
 // evenly by ARRAY INDEX, never by real elapsed time. That's invisible when
-// records are evenly spaced, but this app's history mixes a handful of
-// sparse quarterly snapshots (2021-2024) with dense near-daily records
-// (2025-2026): ~14 old points vs ~80 recent ones. Index-spacing squeezes
-// those 3+ sparse years into a sliver near the left edge and stretches the
-// last ~14 months across almost the entire chart — years of real history
-// look "short", and the line connecting the sparse old points draws a fake
-// smooth ramp that isn't really there. Picking better tick *labels* (the
-// previous fix here) can't correct this: labels just get relabeled at
-// whatever index position their date happens to fall on.
-// The real fix is a numeric time-scaled axis: chartData now carries a "t"
-// timestamp, the XAxis uses type="number" with a dataMin/dataMax domain, so
-// pixel position is proportional to actual elapsed time. pickEvenTimeTicks
-// just returns evenly spaced timestamps to label — no snapping to existing
-// data needed, since a continuous numeric axis can place a tick anywhere.
+// records are evenly spaced, but sparse older snapshots mixed with dense
+// near-daily records would otherwise squeeze years of history into a
+// sliver near the left edge while the recent dense stretch dominates the
+// chart. The fix is a numeric time-scaled axis: chartData carries a "t"
+// timestamp, the XAxis uses type="number" with a dataMin/dataMax domain,
+// so pixel position is proportional to actual elapsed time.
+// pickEvenTimeTicks just returns evenly spaced timestamps to label — no
+// snapping to existing data needed, since a continuous numeric axis can
+// place a tick anywhere.
 function pickEvenTimeTicks(data, key, count = 6) {
   if (!data || data.length === 0) return [];
   const minT = data[0][key], maxT = data[data.length - 1][key];
@@ -169,8 +165,6 @@ function formatTickDate(t) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
-
-const pf = (n) => `${n >= 0 ? "+" : ""}${(n ?? 0).toFixed(2)}%`;
 
 // Animates a number counting up/down to its new value instead of jumping
 // instantly — used for the big "目前總資產" figure so a live-price refresh
@@ -324,81 +318,8 @@ function validateBackupPayload(payload) {
     && isObject(data.planSchedule);
 }
 
-// ---- seed data imported from user's Excel (存股現況表) ----
-const DAILY_SEED = [
-  { date: "2025-06-26", twValue: 3166040, usValue: 0, twCost: 2565517, usCost: 0 },
-  { date: "2025-07-25", twValue: 3195048, usValue: 0, twCost: 2664889, usCost: 0 },
-  { date: "2025-08-26", twValue: 3210265, usValue: 0, twCost: 2774652, usCost: 0 },
-  { date: "2025-09-26", twValue: 3284473, usValue: 0, twCost: 2880672, usCost: 0 },
-  { date: "2025-10-27", twValue: 3368608, usValue: 0, twCost: 2986790, usCost: 0 },
-  { date: "2025-11-26", twValue: 3262660, usValue: 0, twCost: 3089600, usCost: 0 },
-  { date: "2025-12-26", twValue: 3362990, usValue: 0, twCost: 3192293, usCost: 0 },
-  { date: "2026-01-26", twValue: 3538946, usValue: 0, twCost: 3226215, usCost: 0 },
-  { date: "2026-02-26", twValue: 3756281, usValue: 0, twCost: 3235552, usCost: 0 },
-  { date: "2026-03-16", twValue: 3618543, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-03-26", twValue: 3600657, usValue: 0, twCost: 3250251, usCost: 0 },
-  { date: "2026-04-20", twValue: 3888320, usValue: 0, twCost: 3265063, usCost: 0 },
-  { date: "2026-05-22", twValue: 4428092, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-25", twValue: 4646611, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-26", twValue: 4626800, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-27", twValue: 4750345, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-28", twValue: 4672076, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-29", twValue: 4810347, usValue: 0, twCost: 3342530, usCost: 0 },
-  { date: "2026-06-01", twValue: 4961475, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-02", twValue: 5055962, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-03", twValue: 5151392, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-05", twValue: 4975604, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-08", twValue: 4755334, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-09", twValue: 4938207, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-10", twValue: 4781311, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-11", twValue: 4777273, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-12", twValue: 4875398, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-15", twValue: 4970680, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-16", twValue: 4977658, usValue: 3771, twCost: 0, usCost: 0 },
-  { date: "2026-06-17", twValue: 5013265, usValue: 7444, twCost: 0, usCost: 0 },
-  { date: "2026-06-18", twValue: 5093695, usValue: 7475, twCost: 0, usCost: 0 },
-  { date: "2026-06-22", twValue: 5219138, usValue: 7475, twCost: 0, usCost: 0 },
-  { date: "2026-06-23", twValue: 5181764, usValue: 11938, twCost: 0, usCost: 0 },
-  { date: "2026-06-24", twValue: 5132783, usValue: 16242, twCost: 0, usCost: 0 },
-  { date: "2026-06-25", twValue: 5137417, usValue: 16206, twCost: 0, usCost: 0 },
-  { date: "2026-06-26", twValue: 4980721, usValue: 16300, twCost: 0, usCost: 0 },
-  { date: "2026-06-29", twValue: 5009911, usValue: 16311, twCost: 0, usCost: 0 },
-  { date: "2026-06-30", twValue: 5151725, usValue: 21225, twCost: 3403799, usCost: 0 },
-  { date: "2026-07-01", twValue: 5117489, usValue: 21463, twCost: 0, usCost: 0 },
-  { date: "2026-07-02", twValue: 5112269, usValue: 21345, twCost: 0, usCost: 0 },
-  { date: "2026-07-03", twValue: 5143370, usValue: 24984, twCost: 0, usCost: 0 },
-  { date: "2026-07-06", twValue: 5178933, usValue: 24984, twCost: 0, usCost: 0 },
-  { date: "2026-07-07", twValue: 5083060, usValue: 31067, twCost: 0, usCost: 0 },
-  { date: "2026-07-08", twValue: 5100787, usValue: 30874, twCost: 0, usCost: 0 },
-  { date: "2026-07-09", twValue: 5125553, usValue: 30892, twCost: 0, usCost: 0 },
-  { date: "2026-07-13", twValue: 5115395, usValue: 37150, twCost: 3587902, usCost: 36499 },
-  { date: "2026-07-14", twValue: 5066227, usValue: 41292, twCost: 3603620, usCost: 41125 },
-  { date: "2026-07-15", twValue: 5197934, usValue: 41561, twCost: 3615373, usCost: 41125 },
-  { date: "2026-07-16", twValue: 5178960, usValue: 43605, twCost: 3627032, usCost: 43125 },
-  { date: "2026-07-17", twValue: 4991457, usValue: 46362, twCost: 3640177, usCost: 46240 },
-  { date: "2026-07-20", twValue: 4932564, usValue: 45866, twCost: 3656141, usCost: 46250 },
-  { date: "2026-07-21", twValue: 4914623, usValue: 50468, twCost: 3657895, usCost: 51000 },
-  { date: "2026-07-22", twValue: 5052937, usValue: 51283, twCost: 3665135, usCost: 51000 },
-  { date: "2026-07-23", twValue: 5031327, usValue: 51252, twCost: 3669882, usCost: 51000 },
-  { date: "2026-07-24", twValue: 4985815, usValue: 53502, twCost: 3675925, usCost: 54125 },
-  { date: "2026-07-27", twValue: 4975929, usValue: 53445, twCost: 3684836, usCost: 54125 },
-  { date: "2026-07-28", twValue: 4818119, usValue: 58292, twCost: 3712139, usCost: 59250 },
-  { date: "2026-07-29", twValue: 4685161, usValue: 58270, twCost: 3729044, usCost: 59250 },
-  { date: "2026-07-30", twValue: 4646661, usValue: 57151, twCost: 3731030, usCost: 59250 },
-  { date: "2026-07-31", twValue: 4986167, usValue: 58658, twCost: 3733341, usCost: 59250 },
-  { date: "2026-08-03", twValue: 5011134, usValue: 58755, twCost: 3733341, usCost: 59250 },
-  { date: "2026-08-04", twValue: 5080385, usValue: 63033, twCost: 3739509, usCost: 62375 },
-  { date: "2026-08-05", twValue: 5174562, usValue: 64542, twCost: 3739509, usCost: 62375 },
-  { date: "2026-08-06", twValue: 5157649, usValue: 64030, twCost: 3739509, usCost: 62375 },
-  { date: "2026-08-07", twValue: 5141151, usValue: 63815, twCost: 3747554, usCost: 62375 },
-  { date: "2026-08-10", twValue: 5274347, usValue: 67530, twCost: 3748544, usCost: 65500 },
-  { date: "2026-08-11", twValue: 5299567, usValue: 67259, twCost: 3782584, usCost: 65500 },
-  { date: "2026-08-12", twValue: 5339625, usValue: 72282, twCost: 3782573, usCost: 70625 },
-  { date: "2026-08-13", twValue: 5375077, usValue: 72555, twCost: 3782573, usCost: 70625 },
-  { date: "2026-08-14", twValue: 5416627, usValue: 73931, twCost: 3791128, usCost: 71625 },
-  { date: "2026-08-17", twValue: 5381482, usValue: 75639, twCost: 3791319, usCost: 73333 },
-  { date: "2026-08-18", twValue: 5333972, usValue: 74959, twCost: 3792423, usCost: 73750 },
-];
+// ---- 乾淨版：不內建任何個人真實資料，供家人自行輸入 ----
+const DAILY_SEED = [];
 
 function AssetTracker() {
   const [ready, setReady] = useState(false);
@@ -545,11 +466,10 @@ function AssetTracker() {
   }));
 
   // "今年以來(YTD)" — market-value change since the start of the current
-  // calendar year. Like the other stat cards, this is value-based, not a
-  // cost-adjusted/time-weighted return: it doesn't separate new
-  // contributions from investment gains. Baseline is the last record on or
-  // before Jan 1 of this year; if tracking only started sometime this year,
-  // falls back to the very first record so the number stays meaningful.
+  // calendar year. Value-based like the other stat cards, not a cost-
+  // adjusted/time-weighted return. Baseline is the last record on or
+  // before Jan 1 of this year; falls back to the very first record if
+  // tracking only started sometime this year.
   const ytdBase = (() => {
     const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
     let base = null;
@@ -834,24 +754,23 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     isFetchingRef.current = false;
   };
 
-  // Auto-refresh when the panel is ready, then every 15 seconds — but only
+  // Auto-refresh when the panel is ready, then every 60 seconds — but only
   // during TWSE trading hours. Outside those hours the price wouldn't be
-  // changing anyway, so this avoids hitting the price source for nothing
-  // all evening/overnight/weekends — it falls back to fully manual then.
-  // The manual "抓取即時股價" button is unaffected by this — you can still
-  // press it any time to check the last close. If we just loaded a cache
-  // that's still fresh (e.g. you switched tabs and back within a few
-  // seconds), skip the immediate refetch and just let the interval pick up
-  // from there. The effect keys off activeSymbolsKey (not the array itself)
-  // so it resets the interval when holdings actually change, not on every
-  // render.
+  // changing anyway, so this avoids hammering the free price sources for
+  // nothing all evening/overnight/weekends. The manual "抓取即時股價" button
+  // is unaffected by this — you can still press it any time to check the
+  // last close. If we just loaded a cache that's still fresh (e.g. you
+  // switched tabs and back within a minute), skip the immediate refetch and
+  // just let the interval pick up from there. The effect keys off
+  // activeSymbolsKey (not the array itself) so it resets the interval when
+  // holdings actually change, not on every render.
   useEffect(() => {
     if (!cacheLoaded || !activeSymbolsKey) return;
-    const isFresh = Date.now() - lastFetchAtRef.current < 12000;
+    const isFresh = Date.now() - lastFetchAtRef.current < 55000;
     if (!isFresh && isTwseTradingHours()) fetchAllLive();
     const timer = setInterval(() => {
       if (isTwseTradingHours()) fetchAllLive();
-    }, 15000);
+    }, 60000);
     return () => clearInterval(timer);
   }, [cacheLoaded, activeSymbolsKey]);
 
@@ -878,7 +797,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
     <Panel title="即時股價">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[11px]" style={{ color: COLORS.sub }}>
-          {liveStatus === "idle" && `自動抓取目前持有的 ${activeHoldings.length} 檔台股（開盤時間每 15 秒更新，收盤後改手動）`}
+          {liveStatus === "idle" && `自動抓取目前持有的 ${activeHoldings.length} 檔台股（開盤時間每 60 秒更新）`}
           {liveStatus === "loading" && "更新中…"}
           {liveStatus === "done" && liveAt && (staleOne
             ? `休市中，顯示 ${staleOne.asOfDate.getFullYear()}/${String(staleOne.asOfDate.getMonth()+1).padStart(2,"0")}/${String(staleOne.asOfDate.getDate()).padStart(2,"0")} 收盤價（查詢 ${liveAt.toLocaleTimeString("zh-TW", { hour12: false })}）`
@@ -968,12 +887,11 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
   totalReturn, totalReturnPct, highPoint, drawdown, ytdGain, ytdPct, chartData, goal, totalInvested, holdings,
   onFillDailyTw }) {
   const up = dailyChange >= 0;
-  // Defaults to "1年" rather than "全部": with 3+ sparse years plotted
-  // proportionally to real time (see pickEvenTimeTicks above), the last
-  // few months of daily-tracked detail — the part most people check day to
-  // day — get compressed into a thin sliver on the full-history view. A
-  // shorter default window shows that recent detail first; "全部" is one
-  // tap away for anyone who wants the long-term shape.
+  // Defaults to "1年" rather than "全部": on a longer history, plotting
+  // proportionally to real time compresses the most recently tracked
+  // detail — the part most people check day to day — into a thin sliver
+  // on the full-history view. A shorter default window shows that recent
+  // detail first; "全部" is one tap away for the long-term shape.
   const [chartRangeId, setChartRangeId] = useState("1y");
   const rangedChartData = useMemo(() => {
     const range = CHART_RANGES.find((r) => r.id === chartRangeId) || CHART_RANGES[CHART_RANGES.length - 1];
@@ -1119,82 +1037,66 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
   const remove = (id) => setRecords((r) => r.filter((x) => x.id !== id));
   const reversed = [...records].reverse();
 
-  // Monthly summary: for each month, compare the last record of that month
-  // against the last record before it (i.e. the prior month's closing
-  // value) to get that month's gain/loss and return %. The very first
-  // month in the whole history has no "before" record to compare against,
-  // so it's left blank rather than showing a misleading 0%/100%.
+  // 月度績效（以每日紀錄台股+美股計算）
   const monthlyStats = {};
-  const monthKey = (d) => d.slice(0, 7); // "YYYY-MM"
-  let lastSeenPerMonth = {};
+  const monthKey = (d) => d.slice(0, 7);
+  const lastSeenPerMonth = {};
   records.forEach((r) => { lastSeenPerMonth[monthKey(r.date)] = r; });
   const monthKeys = Object.keys(lastSeenPerMonth).sort();
   monthKeys.forEach((mk, i) => {
     const endRec = lastSeenPerMonth[mk];
-    const endValue = endRec.twValue + endRec.usValue;
+    const endValue = (endRec.twValue || 0) + (endRec.usValue || 0);
     const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
     const prevMk = i > 0 ? monthKeys[i - 1] : null;
     if (!prevMk) { monthlyStats[mk] = null; return; }
     const startRec = lastSeenPerMonth[prevMk];
-    const startValue = startRec.twValue + startRec.usValue;
+    const startValue = (startRec.twValue || 0) + (startRec.usValue || 0);
     const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
-    // Market return isolates actual investment performance from money you
-    // added that month: compare unrealized gain (value − cost) at the
-    // start vs end of the month, instead of comparing raw asset value
-    // (which would count new contributions as if they were investment
-    // gains). Contribution is the month's own number: how much your cost
-    // basis grew, i.e. how much new money went in.
-    // This only works if BOTH ends of the month have real cost data. If
-    // cost tracking started partway through your history, one side will
-    // read as 0 (not "genuinely zero cost", just "not filled in yet") —
-    // using it anyway would misread that as a huge fake gain/loss for
-    // whichever month straddles that transition. Fall back to the plain
-    // value-based estimate for exactly that month instead.
+    const valueDelta = endValue - startValue;
     const hasCostBothEnds = startCost > 0 && endCost > 0;
-    let marketReturn, pct, contribution;
+    let invested = null;
+    let pnl;
     if (hasCostBothEnds) {
-      marketReturn = (endValue - endCost) - (startValue - startCost);
-      pct = startValue ? (marketReturn / startValue) * 100 : 0;
-      contribution = endCost - startCost;
+      invested = endCost - startCost;
+      pnl = valueDelta - invested;
     } else {
-      marketReturn = endValue - startValue;
-      pct = startValue ? (marketReturn / startValue) * 100 : 0;
-      contribution = null; // unknown split between market move and new money
+      pnl = valueDelta;
     }
-    monthlyStats[mk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
+    const retPct = startValue ? (pnl / startValue) * 100 : 0;
+    monthlyStats[mk] = {
+      valueDelta, invested, pnl, retPct,
+      approximate: !hasCostBothEnds,
+      marketReturn: pnl, pct: retPct, contribution: invested,
+    };
   });
 
-  // Yearly summary: same market-return / contribution split as monthly
-  // above, just grouped by year instead of month. Reuses the exact same
-  // logic (and the same "no cost data on one side" fallback) so the
-  // numbers here are directly comparable to the monthly breakdown.
-  const yearlyStats = {};
-  const yearKey = (d) => d.slice(0, 4); // "YYYY"
-  let lastSeenPerYear = {};
-  records.forEach((r) => { lastSeenPerYear[yearKey(r.date)] = r; });
+  // 年度績效
+  const yearlyStats = [];
+  const lastSeenPerYear = {};
+  records.forEach((r) => { lastSeenPerYear[String(r.date).slice(0, 4)] = r; });
   const yearKeys = Object.keys(lastSeenPerYear).sort();
   yearKeys.forEach((yk, i) => {
+    if (i === 0) return;
     const endRec = lastSeenPerYear[yk];
-    const endValue = endRec.twValue + endRec.usValue;
+    const startRec = lastSeenPerYear[yearKeys[i - 1]];
+    const endValue = (endRec.twValue || 0) + (endRec.usValue || 0);
+    const startValue = (startRec.twValue || 0) + (startRec.usValue || 0);
     const endCost = (endRec.twCost || 0) + (endRec.usCost || 0);
-    const prevYk = i > 0 ? yearKeys[i - 1] : null;
-    if (!prevYk) { yearlyStats[yk] = null; return; }
-    const startRec = lastSeenPerYear[prevYk];
-    const startValue = startRec.twValue + startRec.usValue;
     const startCost = (startRec.twCost || 0) + (startRec.usCost || 0);
+    const valueDelta = endValue - startValue;
     const hasCostBothEnds = startCost > 0 && endCost > 0;
-    let marketReturn, pct, contribution;
+    let invested = null;
+    let pnl;
     if (hasCostBothEnds) {
-      marketReturn = (endValue - endCost) - (startValue - startCost);
-      pct = startValue ? (marketReturn / startValue) * 100 : 0;
-      contribution = endCost - startCost;
+      invested = endCost - startCost;
+      pnl = valueDelta - invested;
     } else {
-      marketReturn = endValue - startValue;
-      pct = startValue ? (marketReturn / startValue) * 100 : 0;
-      contribution = null;
+      pnl = valueDelta;
     }
-    yearlyStats[yk] = { marketReturn, pct, contribution, approximate: !hasCostBothEnds };
+    const retPct = startValue ? (pnl / startValue) * 100 : 0;
+    yearlyStats.push({ year: yk, valueDelta, invested, pnl, retPct, approximate: !hasCostBothEnds });
   });
+  yearlyStats.reverse();
 
   return (
     <div className="space-y-4">
@@ -1220,69 +1122,77 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         <AddButton onClick={add} label="儲存紀錄" />
       </Panel>
 
-      {yearKeys.length > 0 && (
-        <Panel title="年度損益">
-          {yearKeys.some((yk) => yearlyStats[yk]?.approximate) && (
-            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
-              * 成本資料不完整的年份，市場報酬與新增投入無法精準拆分，數字為粗估
-            </div>
-          )}
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
-            {[...yearKeys].reverse().map((yk) => {
-              const stat = yearlyStats[yk];
-              return (
-                <div key={yk} className="rounded-lg px-3 py-2 text-xs mono"
-                  style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                  <div className="flex justify-between items-baseline">
-                    <span style={{ color: COLORS.sub }}>{yk}{stat?.approximate ? " *" : ""}</span>
-                    {stat ? (
-                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
-                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
-                      </span>
-                    ) : (
-                      <span style={{ color: COLORS.sub }}>最早紀錄，無前年可比較</span>
-                    )}
-                  </div>
-                  {stat && stat.contribution != null && stat.contribution !== 0 && (
-                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
-                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
-                    </div>
-                  )}
+      {yearlyStats.length > 0 && (
+        <Panel title="年度績效（粗估）">
+          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
+            以各年最後一筆每日紀錄（台股+美股）計算：損益 ≈ 市值Δ − 淨投入（成本Δ）。
+            * 表示該年成本資料不完整，損益暫等於市值Δ（可能含新投入）。
+          </div>
+          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
+            <div>年份</div>
+            <div className="text-right">淨投入</div>
+            <div className="text-right">市值Δ</div>
+            <div className="text-right">損益</div>
+            <div className="text-right">報酬%</div>
+          </div>
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {yearlyStats.map((y) => (
+              <div key={y.year}
+                className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
+                style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                <div>{y.year}{y.approximate ? " *" : ""}</div>
+                <div className="text-right" style={{ color: COLORS.sub }}>
+                  {y.invested == null ? "—" : `${y.invested >= 0 ? "" : "−"}${nf(Math.abs(y.invested))}`}
                 </div>
-              );
-            })}
+                <div className="text-right" style={{ color: (y.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {(y.valueDelta || 0) >= 0 ? "+" : ""}{nf(y.valueDelta)}
+                </div>
+                <div className="text-right font-bold" style={{ color: (y.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {(y.pnl || 0) >= 0 ? "+" : ""}{nf(y.pnl)}
+                </div>
+                <div className="text-right font-bold" style={{ color: (y.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                  {pf(y.retPct)}
+                </div>
+              </div>
+            ))}
           </div>
         </Panel>
       )}
 
-      {monthKeys.length > 0 && (
-        <Panel title="月度損益">
-          {monthKeys.some((mk) => monthlyStats[mk]?.approximate) && (
-            <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
-              * 成本資料不完整的月份，市場報酬與新增投入無法精準拆分，數字為粗估
-            </div>
-          )}
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+      {monthKeys.length > 1 && (
+        <Panel title="月度績效（粗估）">
+          <div className="text-[10px] mb-2 leading-4" style={{ color: COLORS.sub }}>
+            以每日紀錄「台股+美股」計算：損益 ≈ 市值Δ − 淨投入（成本Δ）。
+            * 表示該月成本資料不完整，損益暫等於市值Δ（可能含新投入）。
+          </div>
+          <div className="grid grid-cols-5 gap-1 text-[9px] font-bold px-1 pb-1.5" style={{ color: COLORS.sub }}>
+            <div>年月</div>
+            <div className="text-right">淨投入</div>
+            <div className="text-right">市值Δ</div>
+            <div className="text-right">損益</div>
+            <div className="text-right">報酬%</div>
+          </div>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
             {[...monthKeys].reverse().map((mk) => {
               const stat = monthlyStats[mk];
+              if (!stat) return null;
               return (
-                <div key={mk} className="rounded-lg px-3 py-2 text-xs mono"
+                <div key={mk}
+                  className="grid grid-cols-5 gap-1 rounded-lg px-1.5 py-1.5 text-[11px] mono items-center"
                   style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                  <div className="flex justify-between items-baseline">
-                    <span style={{ color: COLORS.sub }}>{mk}{stat?.approximate ? " *" : ""}</span>
-                    {stat ? (
-                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
-                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
-                      </span>
-                    ) : (
-                      <span style={{ color: COLORS.sub }}>最早紀錄，無前月可比較</span>
-                    )}
+                  <div>{mk}{stat.approximate ? " *" : ""}</div>
+                  <div className="text-right" style={{ color: COLORS.sub }}>
+                    {stat.invested == null ? "—" : `${stat.invested >= 0 ? "" : "−"}${nf(Math.abs(stat.invested))}`}
                   </div>
-                  {stat && stat.contribution != null && stat.contribution !== 0 && (
-                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
-                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
-                    </div>
-                  )}
+                  <div className="text-right" style={{ color: (stat.valueDelta || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {(stat.valueDelta || 0) >= 0 ? "+" : ""}{nf(stat.valueDelta)}
+                  </div>
+                  <div className="text-right font-bold" style={{ color: (stat.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {(stat.pnl || 0) >= 0 ? "+" : ""}{nf(stat.pnl)}
+                  </div>
+                  <div className="text-right font-bold" style={{ color: (stat.retPct || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                    {pf(stat.retPct)}
+                  </div>
                 </div>
               );
             })}
@@ -1309,18 +1219,26 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                     <div className="pt-3 pb-1.5 text-[11px] font-bold mono"
                       style={{ borderTop: i > 0 ? `1px solid ${COLORS.panelBorder}` : "none", marginTop: i > 0 ? "0.25rem" : 0 }}>
                       <div className="flex justify-between items-baseline">
-                        <span style={{ color: COLORS.gold }}>{mk}{stat?.approximate ? " *" : ""}</span>
+                        <span style={{ color: COLORS.gold }}>{mk}</span>
                         {stat ? (
-                          <span style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
-                            市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                          <span className="text-right" style={{ color: (stat.pnl || 0) >= 0 ? COLORS.gain : COLORS.loss }}>
+                            損益 {(stat.pnl || 0) >= 0 ? "+" : ""}{nf(stat.pnl)}（{pf(stat.retPct)}）
                           </span>
                         ) : (
                           <span style={{ color: COLORS.sub, fontWeight: "normal" }}>最早紀錄，無前月可比較</span>
                         )}
                       </div>
-                      {stat && stat.contribution != null && stat.contribution !== 0 && (
-                        <div className="text-right font-normal" style={{ color: COLORS.gold }}>
-                          新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                      {stat && (
+                        <div className="text-right font-normal mt-0.5" style={{ color: COLORS.sub }}>
+                          市值Δ {(stat.valueDelta || 0) >= 0 ? "+" : ""}{nf(stat.valueDelta)}
+                          {stat.invested != null && (
+                            <span> ／ 淨投入 {stat.invested >= 0 ? "+" : ""}{nf(stat.invested)}</span>
+                          )}
+                        </div>
+                      )}
+                      {stat && stat.approximate && (
+                        <div className="text-right font-normal" style={{ color: COLORS.sub }}>
+                          成本資料不完整，此為粗估（含新增投入）
                         </div>
                       )}
                     </div>
@@ -1911,80 +1829,31 @@ function TabBar({ tab, setTab }) {
 
 // ---------------- defaults (first run) ----------------
 function defaultHoldings() {
-  return [
-    { id: uid(), symbol: "0050", name: "元大台灣50", initialShares: 3919, target2035: 42679 },
-    { id: uid(), symbol: "0056", name: "元大高股息", initialShares: 90007, target2035: 147196 },
-    { id: uid(), symbol: "006208", name: "富邦台50", initialShares: 56, target2035: 0 },
-    { id: uid(), symbol: "00685L", name: "群益台灣加權正2", initialShares: 2561, target2035: 0 },
-    { id: uid(), symbol: "009816", name: "凱基台灣TOP50", initialShares: 215, target2035: 0 },
-    { id: uid(), symbol: "00981A", name: "主動統一台股增長", initialShares: 0, target2035: 0 },
-    { id: uid(), symbol: "00991A", name: "主動復華未來50", initialShares: 512, target2035: 0 },
-    { id: uid(), symbol: "2330", name: "台積電", initialShares: 32, target2035: 0 },
-  ];
+  // 乾淨版：不內建個人持股，請自行於「持股進度」新增
+  return [];
 }
 function defaultTrades() {
-  return [
-    { id: uid(), date: "2026-08-04", symbol: "0056", action: "buy", shares: 49, price: 49.98, fee: 3, tax: 0, amount: 2452.02, note: "" },
-    { id: uid(), date: "2026-08-04", symbol: "0050", action: "buy", shares: 36, price: 100.6, fee: 5, tax: 0, amount: 3626.6, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "0050", action: "buy", shares: 35, price: 103.8, fee: 5, tax: 0, amount: 3638.0, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "0056", action: "buy", shares: 47, price: 51.5, fee: 3, tax: 0, amount: 2423.5, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "00981A", action: "buy", shares: 35, price: 28.27, fee: 1, tax: 0, amount: 990.45, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "00991A", action: "buy", shares: 59, price: 16.82, fee: 1, tax: 0, amount: 993.38, note: "" },
-    { id: uid(), date: "2026-08-11", symbol: "0050", action: "buy", shares: 324, price: 103.84, fee: 49, tax: 0, amount: 33693.16, note: "" },
-    { id: uid(), date: "2026-08-11", symbol: "0056", action: "buy", shares: 46, price: 52.45, fee: 3, tax: 0, amount: 2415.7, note: "" },
-    { id: uid(), date: "2026-08-14", symbol: "0050", action: "buy", shares: 34, price: 107.2, fee: 5, tax: 0, amount: 3649.8, note: "" },
-    { id: uid(), date: "2026-08-14", symbol: "0056", action: "buy", shares: 46, price: 53.7, fee: 3, tax: 0, amount: 2473.2, note: "" },
-    { id: uid(), date: "2026-08-14", symbol: "2330", action: "buy", shares: 1, price: 2430, fee: 3, tax: 0, amount: 2433, note: "" },
-    { id: uid(), date: "2026-08-17", symbol: "0050", action: "buy", shares: 1, price: 106, fee: 1, tax: 0, amount: 107, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "0050", action: "buy", shares: 46, price: 106.45, fee: 6, tax: 0, amount: 4902.7, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "0056", action: "buy", shares: 69, price: 53.1, fee: 5, tax: 0, amount: 3668.9, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "2330", action: "buy", shares: 1, price: 2395, fee: 3, tax: 0, amount: 2398, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "00991A", action: "sell", shares: 571, price: 19.5, fee: 15, tax: 11, amount: 11108.5, note: "" },
-  ];
+  // 乾淨版：不內建個人交易紀錄，請自行於「交易紀錄」新增
+  return [];
 }
 function defaultDividends() {
-  return [
-    { id: uid(), date: "2021-05-01", symbol: "00878", shares: 32000, perShare: 0.25, amount: 8000 },
-    { id: uid(), date: "2021-08-01", symbol: "00878", shares: 50000, perShare: 0.3, amount: 15000 },
-    { id: uid(), date: "2021-11-01", symbol: "00878", shares: 65000, perShare: 0.28, amount: 18200 },
-    { id: uid(), date: "2022-02-01", symbol: "00878", shares: 87000, perShare: 0.3, amount: 26100 },
-    { id: uid(), date: "2022-05-01", symbol: "00878", shares: 97000, perShare: 0.32, amount: 31040 },
-    { id: uid(), date: "2022-08-01", symbol: "00878", shares: 97000, perShare: 0.28, amount: 27160 },
-    { id: uid(), date: "2022-11-01", symbol: "00878", shares: 99000, perShare: 0.28, amount: 27720 },
-    { id: uid(), date: "2023-02-01", symbol: "00878", shares: 99000, perShare: 0.27, amount: 26730 },
-    { id: uid(), date: "2023-05-01", symbol: "00878", shares: 99000, perShare: 0.27, amount: 26730 },
-    { id: uid(), date: "2023-08-01", symbol: "00878", shares: 99000, perShare: 0.35, amount: 34650 },
-    { id: uid(), date: "2023-11-01", symbol: "00878", shares: 101000, perShare: 0.35, amount: 35350 },
-    { id: uid(), date: "2024-02-01", symbol: "00878", shares: 106000, perShare: 0.4, amount: 42400 },
-    { id: uid(), date: "2024-05-01", symbol: "00878", shares: 110000, perShare: 0.51, amount: 56100 },
-    { id: uid(), date: "2024-08-01", symbol: "00878", shares: 111000, perShare: 0.55, amount: 61050 },
-    { id: uid(), date: "2024-11-01", symbol: "00878", shares: 111000, perShare: 0.55, amount: 61050 },
-    { id: uid(), date: "2025-01-01", symbol: "0056", shares: 86000, perShare: 1.07, amount: 92020 },
-    { id: uid(), date: "2025-04-01", symbol: "0056", shares: 88350, perShare: 1.07, amount: 94534 },
-    { id: uid(), date: "2025-07-01", symbol: "0056", shares: 87944, perShare: 0.87, amount: 76511 },
-    { id: uid(), date: "2025-10-01", symbol: "0056", shares: 87595, perShare: 0.87, amount: 76208 },
-    { id: uid(), date: "2026-01-01", symbol: "0056", shares: 87595, perShare: 0.87, amount: 76208 },
-    { id: uid(), date: "2026-04-01", symbol: "0056", shares: 88062, perShare: 1, amount: 88062 },
-    { id: uid(), date: "2026-07-01", symbol: "0056", shares: 89736, perShare: 1.35, amount: 121144 },
-  ];
+  // 乾淨版：不內建個人配息紀錄，請自行於「配息」新增
+  return [];
 }
 function defaultDailyRecords() {
   return DAILY_SEED.map((r) => ({ id: uid(), ...r }));
 }
 function defaultPlan() {
-  return [
-    { id: uid(), symbol: "0050", amount: 40000, note: "核心分散" },
-    { id: uid(), symbol: "0056", amount: 30000, note: "股息型，衝100張" },
-    { id: uid(), symbol: "VOO", amount: 25000, note: "標普500" },
-  ];
+  // 乾淨版：不內建個人定期定額配置，請自行於「計畫設定」新增
+  return [];
 }
 function defaultPlanSchedule() {
   return {
-    startDate: "2025-07-01",
-    initialCapital: 2496327,
-    monthlyAmount: 95000,
-    annualReturn: 11,
-    horizonMonths: 108,
+    startDate: todayStr(),
+    initialCapital: 0,
+    monthlyAmount: 0,
+    annualReturn: 8,
+    horizonMonths: 120,
   };
 }
 
