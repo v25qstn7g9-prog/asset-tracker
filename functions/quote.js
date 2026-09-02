@@ -16,7 +16,7 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-async function fetchJson(url, timeoutMs = 7000) {
+async function fetchJson(url, timeoutMs = 7000, extraHeaders = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -26,10 +26,11 @@ async function fetchJson(url, timeoutMs = 7000) {
         "accept": "application/json,text/plain,*/*",
         "user-agent": "Mozilla/5.0 (compatible; StockTracker/4.6-v2)",
         "referer": "https://mis.twse.com.tw/",
+        ...extraHeaders,
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return { data: await res.json(), headers: res.headers };
   } finally {
     clearTimeout(timer);
   }
@@ -43,10 +44,63 @@ function firstNumber(s) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+// TWSE's getStockInfo.jsp is meant to be called from a browser session that
+// first loaded mis.twse.com.tw/stock/index.jsp (that request sets a
+// JSESSIONID cookie). Every community implementation of this API does that
+// session step first — see e.g. the Python notebook at
+// github.com/victorgau/investment ("台股即時股價資料.ipynb"), which explicitly
+// does `req.get(SESSION_URL)` before the quote call. This function was
+// calling getStockInfo.jsp cold, with no cookie at all, on every single
+// request. TWSE tolerates that (no error), but without a session it can
+// silently serve a coarser/delayed snapshot instead of the live tick —
+// which matches the symptom reported: prices a little off (and even the
+// wrong side of prevClose) compared to a broker app checked at the same
+// moment. A serverless function gets a fresh runtime often enough that
+// "just reuse the cookie from last time" isn't free, so the session is
+// cached at module scope for a few minutes and only re-established when
+// it's missing or stale — most invocations reuse a warm session instead of
+// paying the extra round-trip.
+let cachedSession = null; // { cookie, at }
+const SESSION_TTL_MS = 5 * 60 * 1000;
+
+async function getTwseSessionCookie() {
+  if (cachedSession && Date.now() - cachedSession.at < SESSION_TTL_MS) {
+    return cachedSession.cookie;
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    let res;
+    try {
+      res = await fetch("https://mis.twse.com.tw/stock/index.jsp", {
+        signal: controller.signal,
+        headers: {
+          "accept": "text/html",
+          "user-agent": "Mozilla/5.0 (compatible; StockTracker/4.6-v2)",
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const setCookie = res.headers.get("set-cookie") || "";
+    // Only the session id matters for the follow-up request; strip
+    // Path/Expires/etc attributes that come after the first ";".
+    const cookie = setCookie.split(";")[0] || null;
+    cachedSession = { cookie, at: Date.now() };
+    return cookie;
+  } catch (e) {
+    // No session is not fatal — fall back to a cookie-less request, which
+    // is exactly what this endpoint did before this fix.
+    cachedSession = { cookie: null, at: Date.now() };
+    return null;
+  }
+}
+
 async function fetchTwse(symbols) {
+  const cookie = await getTwseSessionCookie();
   const exCh = symbols.map((s) => `tse_${s}.tw`).join("|");
   const url = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${encodeURIComponent(exCh)}&json=1&delay=0&_ts=${Date.now()}`;
-  const data = await fetchJson(url, 6500);
+  const { data } = await fetchJson(url, 6500, cookie ? { cookie } : {});
   if (!data || !Array.isArray(data.msgArray)) throw new Error("TWSE invalid response");
 
   const quotes = {};
@@ -92,12 +146,28 @@ async function fetchTwse(symbols) {
 
     if (!Number.isFinite(price)) continue;
 
+    // "tlong" is TWSE's own tick timestamp (ms since epoch) for this quote —
+    // when the underlying data was actually generated, as opposed to when
+    // our function happened to fetch it. Surfacing this lets the frontend
+    // show a real "as of" time and detect staleness (e.g. a tick from 10
+    // minutes ago) instead of just trusting whichever field back-filled the
+    // price. Previously this was always null for TWSE, so the app had no
+    // way to tell a fresh tick from an old cached one.
+    const tickMs = Number(item.tlong);
+    const asOfDate = Number.isFinite(tickMs) ? new Date(tickMs).toISOString() : null;
+    const tickAgeMs = Number.isFinite(tickMs) ? Date.now() - tickMs : null;
+    // A tick older than 2 minutes during trading hours is a sign this
+    // symbol's feed is lagging (thin trading, or TWSE serving a cached
+    // snapshot) — flag it as stale even though we did get a real "z" price,
+    // so the UI can surface it instead of silently showing an old number.
+    const isLaggy = tickAgeMs != null && tickAgeMs > 2 * 60 * 1000;
+
     const hasRealPrice = priceSource !== "prev";
     quotes[symbol] = {
       price,
       prevClose,
-      isStale: !hasRealPrice,
-      asOfDate: null,
+      isStale: !hasRealPrice || isLaggy,
+      asOfDate,
       source: "TWSE",
       priceSource, // debug: last | mid | ask | bid | open | prev
     };
@@ -108,7 +178,7 @@ async function fetchTwse(symbols) {
 async function fetchYahoo(symbol) {
   const yahooSymbol = `${symbol}.TW`;
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=5d&_ts=${Date.now()}`;
-  const data = await fetchJson(url, 6500);
+  const { data } = await fetchJson(url, 6500);
   const result = data?.chart?.result?.[0];
   if (!result) throw new Error("Yahoo no result");
 
