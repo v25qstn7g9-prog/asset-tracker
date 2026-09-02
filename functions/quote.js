@@ -236,6 +236,7 @@ export async function onRequestGet(context) {
     const sources = [...new Set(Object.values(quotes).map((q) => q.source))];
     return jsonResponse({
       ok: true,
+      version: "4.6-quote-stable-3",
       source: sources.join("+"),
       fetchedAt: new Date().toISOString(),
       quotes,
