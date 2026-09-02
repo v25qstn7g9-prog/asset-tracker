@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.7";
+const APP_VERSION = "4.6-personal-v2.8";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -960,6 +960,7 @@ function LivePricePanel({ holdings, onFillDailyTw }) {
 const CHART_RANGES = [
   { id: "1m", label: "1個月", days: 30 },
   { id: "3m", label: "3個月", days: 90 },
+  { id: "6m", label: "半年", days: 182 },
   { id: "1y", label: "1年", days: 365 },
   { id: "all", label: "全部", days: null },
 ];
@@ -1014,7 +1015,7 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
                 const active = chartRangeId === r.id;
                 return (
                   <button key={r.id} onClick={() => setChartRangeId(r.id)}
-                    className="rounded-lg px-2 py-1 text-[10px] font-bold"
+                    className="rounded-lg px-1.5 py-1 text-[10px] font-bold whitespace-nowrap"
                     style={{
                       background: active ? COLORS.gold : COLORS.bg,
                       color: active ? "#0A0F1C" : COLORS.sub,
