@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.14";
+const APP_VERSION = "4.6-family-clean-v9";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -346,80 +346,8 @@ function validateBackupPayload(payload) {
 }
 
 // ---- seed data imported from user's Excel (存股現況表) ----
-const DAILY_SEED = [
-  { date: "2025-06-26", twValue: 3166040, usValue: 0, twCost: 2565517, usCost: 0 },
-  { date: "2025-07-25", twValue: 3195048, usValue: 0, twCost: 2664889, usCost: 0 },
-  { date: "2025-08-26", twValue: 3210265, usValue: 0, twCost: 2774652, usCost: 0 },
-  { date: "2025-09-26", twValue: 3284473, usValue: 0, twCost: 2880672, usCost: 0 },
-  { date: "2025-10-27", twValue: 3368608, usValue: 0, twCost: 2986790, usCost: 0 },
-  { date: "2025-11-26", twValue: 3262660, usValue: 0, twCost: 3089600, usCost: 0 },
-  { date: "2025-12-26", twValue: 3362990, usValue: 0, twCost: 3192293, usCost: 0 },
-  { date: "2026-01-26", twValue: 3538946, usValue: 0, twCost: 3226215, usCost: 0 },
-  { date: "2026-02-26", twValue: 3756281, usValue: 0, twCost: 3235552, usCost: 0 },
-  { date: "2026-03-16", twValue: 3618543, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-03-26", twValue: 3600657, usValue: 0, twCost: 3250251, usCost: 0 },
-  { date: "2026-04-20", twValue: 3888320, usValue: 0, twCost: 3265063, usCost: 0 },
-  { date: "2026-05-22", twValue: 4428092, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-25", twValue: 4646611, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-26", twValue: 4626800, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-27", twValue: 4750345, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-28", twValue: 4672076, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-05-29", twValue: 4810347, usValue: 0, twCost: 3342530, usCost: 0 },
-  { date: "2026-06-01", twValue: 4961475, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-02", twValue: 5055962, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-03", twValue: 5151392, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-05", twValue: 4975604, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-08", twValue: 4755334, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-09", twValue: 4938207, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-10", twValue: 4781311, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-11", twValue: 4777273, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-12", twValue: 4875398, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-15", twValue: 4970680, usValue: 0, twCost: 0, usCost: 0 },
-  { date: "2026-06-16", twValue: 4977658, usValue: 3771, twCost: 0, usCost: 0 },
-  { date: "2026-06-17", twValue: 5013265, usValue: 7444, twCost: 0, usCost: 0 },
-  { date: "2026-06-18", twValue: 5093695, usValue: 7475, twCost: 0, usCost: 0 },
-  { date: "2026-06-22", twValue: 5219138, usValue: 7475, twCost: 0, usCost: 0 },
-  { date: "2026-06-23", twValue: 5181764, usValue: 11938, twCost: 0, usCost: 0 },
-  { date: "2026-06-24", twValue: 5132783, usValue: 16242, twCost: 0, usCost: 0 },
-  { date: "2026-06-25", twValue: 5137417, usValue: 16206, twCost: 0, usCost: 0 },
-  { date: "2026-06-26", twValue: 4980721, usValue: 16300, twCost: 0, usCost: 0 },
-  { date: "2026-06-29", twValue: 5009911, usValue: 16311, twCost: 0, usCost: 0 },
-  { date: "2026-06-30", twValue: 5151725, usValue: 21225, twCost: 3403799, usCost: 0 },
-  { date: "2026-07-01", twValue: 5117489, usValue: 21463, twCost: 0, usCost: 0 },
-  { date: "2026-07-02", twValue: 5112269, usValue: 21345, twCost: 0, usCost: 0 },
-  { date: "2026-07-03", twValue: 5143370, usValue: 24984, twCost: 0, usCost: 0 },
-  { date: "2026-07-06", twValue: 5178933, usValue: 24984, twCost: 0, usCost: 0 },
-  { date: "2026-07-07", twValue: 5083060, usValue: 31067, twCost: 0, usCost: 0 },
-  { date: "2026-07-08", twValue: 5100787, usValue: 30874, twCost: 0, usCost: 0 },
-  { date: "2026-07-09", twValue: 5125553, usValue: 30892, twCost: 0, usCost: 0 },
-  { date: "2026-07-13", twValue: 5115395, usValue: 37150, twCost: 3587902, usCost: 36499 },
-  { date: "2026-07-14", twValue: 5066227, usValue: 41292, twCost: 3603620, usCost: 41125 },
-  { date: "2026-07-15", twValue: 5197934, usValue: 41561, twCost: 3615373, usCost: 41125 },
-  { date: "2026-07-16", twValue: 5178960, usValue: 43605, twCost: 3627032, usCost: 43125 },
-  { date: "2026-07-17", twValue: 4991457, usValue: 46362, twCost: 3640177, usCost: 46240 },
-  { date: "2026-07-20", twValue: 4932564, usValue: 45866, twCost: 3656141, usCost: 46250 },
-  { date: "2026-07-21", twValue: 4914623, usValue: 50468, twCost: 3657895, usCost: 51000 },
-  { date: "2026-07-22", twValue: 5052937, usValue: 51283, twCost: 3665135, usCost: 51000 },
-  { date: "2026-07-23", twValue: 5031327, usValue: 51252, twCost: 3669882, usCost: 51000 },
-  { date: "2026-07-24", twValue: 4985815, usValue: 53502, twCost: 3675925, usCost: 54125 },
-  { date: "2026-07-27", twValue: 4975929, usValue: 53445, twCost: 3684836, usCost: 54125 },
-  { date: "2026-07-28", twValue: 4818119, usValue: 58292, twCost: 3712139, usCost: 59250 },
-  { date: "2026-07-29", twValue: 4685161, usValue: 58270, twCost: 3729044, usCost: 59250 },
-  { date: "2026-07-30", twValue: 4646661, usValue: 57151, twCost: 3731030, usCost: 59250 },
-  { date: "2026-07-31", twValue: 4986167, usValue: 58658, twCost: 3733341, usCost: 59250 },
-  { date: "2026-08-03", twValue: 5011134, usValue: 58755, twCost: 3733341, usCost: 59250 },
-  { date: "2026-08-04", twValue: 5080385, usValue: 63033, twCost: 3739509, usCost: 62375 },
-  { date: "2026-08-05", twValue: 5174562, usValue: 64542, twCost: 3739509, usCost: 62375 },
-  { date: "2026-08-06", twValue: 5157649, usValue: 64030, twCost: 3739509, usCost: 62375 },
-  { date: "2026-08-07", twValue: 5141151, usValue: 63815, twCost: 3747554, usCost: 62375 },
-  { date: "2026-08-10", twValue: 5274347, usValue: 67530, twCost: 3748544, usCost: 65500 },
-  { date: "2026-08-11", twValue: 5299567, usValue: 67259, twCost: 3782584, usCost: 65500 },
-  { date: "2026-08-12", twValue: 5339625, usValue: 72282, twCost: 3782573, usCost: 70625 },
-  { date: "2026-08-13", twValue: 5375077, usValue: 72555, twCost: 3782573, usCost: 70625 },
-  { date: "2026-08-14", twValue: 5416627, usValue: 73931, twCost: 3791128, usCost: 71625 },
-  { date: "2026-08-17", twValue: 5381482, usValue: 75639, twCost: 3791319, usCost: 73333 },
-  { date: "2026-08-18", twValue: 5333972, usValue: 74959, twCost: 3792423, usCost: 73750 },
-];
+// ---- 乾淨版：不內建任何個人真實資料，供家人自行輸入 ----
+const DAILY_SEED = [];
 
 function AssetTracker() {
   const [ready, setReady] = useState(false);
@@ -1411,33 +1339,41 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         <AddButton onClick={add} label="儲存紀錄" />
       </Panel>
 
-      {yearKeys.length > 0 && (
-        <Panel title="年度損益">
-          {yearKeys.some((yk) => yearlyStats[yk]?.approximate) && (
+      {weekKeys.length > 0 && (
+        <Panel title="週度損益">
+          {weekKeys.some((wk) => weeklyStats[wk]?.approximate) && (
             <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
-              * 成本資料不完整的年份，市場報酬與新增投入無法精準拆分，數字為粗估
+              * 成本資料不完整的週份，市場報酬與新增投入無法精準拆分，數字為粗估
             </div>
           )}
-          <div className="space-y-1.5 max-h-64 overflow-y-auto">
-            {[...yearKeys].reverse().map((yk) => {
-              const stat = yearlyStats[yk];
+          <div className="text-[10px] mb-1.5" style={{ color: COLORS.sub }}>左右滑動看更早的週</div>
+          <div className="flex gap-2 overflow-x-auto snap-x snap-mandatory pb-1"
+            style={{ scrollbarWidth: "none" }}>
+            {[...weekKeys].reverse().map((wk) => {
+              const stat = weeklyStats[wk];
+              const up = stat && stat.marketReturn >= 0;
               return (
-                <div key={yk} className="rounded-lg px-3 py-2 text-xs mono"
-                  style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                  <div className="flex justify-between items-baseline">
-                    <span style={{ color: COLORS.sub }}>{yk}{stat?.approximate ? " *" : ""}</span>
-                    {stat ? (
-                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
-                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
-                      </span>
-                    ) : (
-                      <span style={{ color: COLORS.sub }}>最早紀錄，無前年可比較</span>
-                    )}
+                <div key={wk} className="flex-none snap-start rounded-lg px-2 py-2 text-center mono"
+                  style={{ width: "29%", background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                  <div className="text-[9px] mb-1 whitespace-nowrap" style={{ color: COLORS.sub }}>
+                    {weekLabel(wk)}{stat?.approximate ? " *" : ""}
                   </div>
-                  {stat && stat.contribution != null && stat.contribution !== 0 && (
-                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
-                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
-                    </div>
+                  {stat ? (
+                    <>
+                      <div className="text-xs font-bold" style={{ color: up ? COLORS.gain : COLORS.loss }}>
+                        {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}
+                      </div>
+                      <div className="text-[10px]" style={{ color: up ? COLORS.gain : COLORS.loss }}>
+                        {stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%
+                      </div>
+                      {stat.contribution != null && stat.contribution !== 0 && (
+                        <div className="text-[9px] mt-0.5" style={{ color: COLORS.gold }}>
+                          +{nf(stat.contribution)}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-[9px]" style={{ color: COLORS.sub }}>無前週可比較</div>
                   )}
                 </div>
               );
@@ -1481,41 +1417,33 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
         </Panel>
       )}
 
-      {weekKeys.length > 0 && (
-        <Panel title="週度損益">
-          {weekKeys.some((wk) => weeklyStats[wk]?.approximate) && (
+      {yearKeys.length > 0 && (
+        <Panel title="年度損益">
+          {yearKeys.some((yk) => yearlyStats[yk]?.approximate) && (
             <div className="text-[10px] mb-2" style={{ color: COLORS.sub }}>
-              * 成本資料不完整的週份，市場報酬與新增投入無法精準拆分，數字為粗估
+              * 成本資料不完整的年份，市場報酬與新增投入無法精準拆分，數字為粗估
             </div>
           )}
-          <div className="text-[10px] mb-1.5" style={{ color: COLORS.sub }}>左右滑動看更早的週</div>
-          <div className="flex gap-2 overflow-x-auto snap-x snap-mandatory pb-1"
-            style={{ scrollbarWidth: "none" }}>
-            {[...weekKeys].reverse().map((wk) => {
-              const stat = weeklyStats[wk];
-              const up = stat && stat.marketReturn >= 0;
+          <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {[...yearKeys].reverse().map((yk) => {
+              const stat = yearlyStats[yk];
               return (
-                <div key={wk} className="flex-none snap-start rounded-lg px-2 py-2 text-center mono"
-                  style={{ width: "29%", background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
-                  <div className="text-[9px] mb-1 whitespace-nowrap" style={{ color: COLORS.sub }}>
-                    {weekLabel(wk)}{stat?.approximate ? " *" : ""}
+                <div key={yk} className="rounded-lg px-3 py-2 text-xs mono"
+                  style={{ background: COLORS.bg, border: `1px solid ${COLORS.panelBorder}` }}>
+                  <div className="flex justify-between items-baseline">
+                    <span style={{ color: COLORS.sub }}>{yk}{stat?.approximate ? " *" : ""}</span>
+                    {stat ? (
+                      <span className="font-bold" style={{ color: stat.marketReturn >= 0 ? COLORS.gain : COLORS.loss }}>
+                        市場 {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}（{stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%）
+                      </span>
+                    ) : (
+                      <span style={{ color: COLORS.sub }}>最早紀錄，無前年可比較</span>
+                    )}
                   </div>
-                  {stat ? (
-                    <>
-                      <div className="text-xs font-bold" style={{ color: up ? COLORS.gain : COLORS.loss }}>
-                        {stat.marketReturn >= 0 ? "+" : ""}{nf(stat.marketReturn)}
-                      </div>
-                      <div className="text-[10px]" style={{ color: up ? COLORS.gain : COLORS.loss }}>
-                        {stat.pct >= 0 ? "+" : ""}{stat.pct.toFixed(2)}%
-                      </div>
-                      {stat.contribution != null && stat.contribution !== 0 && (
-                        <div className="text-[9px] mt-0.5" style={{ color: COLORS.gold }}>
-                          +{nf(stat.contribution)}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="text-[9px]" style={{ color: COLORS.sub }}>無前週可比較</div>
+                  {stat && stat.contribution != null && stat.contribution !== 0 && (
+                    <div className="text-right mt-0.5" style={{ color: COLORS.gold }}>
+                      新增投入 {stat.contribution >= 0 ? "+" : ""}{nf(stat.contribution)}
+                    </div>
                   )}
                 </div>
               );
@@ -2151,80 +2079,32 @@ function TabBar({ tab, setTab }) {
 
 // ---------------- defaults (first run) ----------------
 function defaultHoldings() {
-  return [
-    { id: uid(), symbol: "0050", name: "元大台灣50", initialShares: 3919, target2035: 42679 },
-    { id: uid(), symbol: "0056", name: "元大高股息", initialShares: 90007, target2035: 147196 },
-    { id: uid(), symbol: "006208", name: "富邦台50", initialShares: 56, target2035: 0 },
-    { id: uid(), symbol: "00685L", name: "群益台灣加權正2", initialShares: 2561, target2035: 0 },
-    { id: uid(), symbol: "009816", name: "凱基台灣TOP50", initialShares: 215, target2035: 0 },
-    { id: uid(), symbol: "00981A", name: "主動統一台股增長", initialShares: 0, target2035: 0 },
-    { id: uid(), symbol: "00991A", name: "主動復華未來50", initialShares: 512, target2035: 0 },
-    { id: uid(), symbol: "2330", name: "台積電", initialShares: 32, target2035: 0 },
-  ];
+  // 乾淨版：不內建個人持股，請自行於「持股進度」新增
+  return [];
 }
 function defaultTrades() {
-  return [
-    { id: uid(), date: "2026-08-04", symbol: "0056", action: "buy", shares: 49, price: 49.98, fee: 3, tax: 0, amount: 2452.02, note: "" },
-    { id: uid(), date: "2026-08-04", symbol: "0050", action: "buy", shares: 36, price: 100.6, fee: 5, tax: 0, amount: 3626.6, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "0050", action: "buy", shares: 35, price: 103.8, fee: 5, tax: 0, amount: 3638.0, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "0056", action: "buy", shares: 47, price: 51.5, fee: 3, tax: 0, amount: 2423.5, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "00981A", action: "buy", shares: 35, price: 28.27, fee: 1, tax: 0, amount: 990.45, note: "" },
-    { id: uid(), date: "2026-08-07", symbol: "00991A", action: "buy", shares: 59, price: 16.82, fee: 1, tax: 0, amount: 993.38, note: "" },
-    { id: uid(), date: "2026-08-11", symbol: "0050", action: "buy", shares: 324, price: 103.84, fee: 49, tax: 0, amount: 33693.16, note: "" },
-    { id: uid(), date: "2026-08-11", symbol: "0056", action: "buy", shares: 46, price: 52.45, fee: 3, tax: 0, amount: 2415.7, note: "" },
-    { id: uid(), date: "2026-08-14", symbol: "0050", action: "buy", shares: 34, price: 107.2, fee: 5, tax: 0, amount: 3649.8, note: "" },
-    { id: uid(), date: "2026-08-14", symbol: "0056", action: "buy", shares: 46, price: 53.7, fee: 3, tax: 0, amount: 2473.2, note: "" },
-    { id: uid(), date: "2026-08-14", symbol: "2330", action: "buy", shares: 1, price: 2430, fee: 3, tax: 0, amount: 2433, note: "" },
-    { id: uid(), date: "2026-08-17", symbol: "0050", action: "buy", shares: 1, price: 106, fee: 1, tax: 0, amount: 107, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "0050", action: "buy", shares: 46, price: 106.45, fee: 6, tax: 0, amount: 4902.7, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "0056", action: "buy", shares: 69, price: 53.1, fee: 5, tax: 0, amount: 3668.9, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "2330", action: "buy", shares: 1, price: 2395, fee: 3, tax: 0, amount: 2398, note: "" },
-    { id: uid(), date: "2026-08-18", symbol: "00991A", action: "sell", shares: 571, price: 19.5, fee: 15, tax: 11, amount: 11108.5, note: "" },
-  ];
+  // 乾淨版：不內建個人交易紀錄，請自行於「交易紀錄」新增
+  return [];
 }
 function defaultDividends() {
-  return [
-    { id: uid(), date: "2021-05-01", symbol: "00878", shares: 32000, perShare: 0.25, amount: 8000 },
-    { id: uid(), date: "2021-08-01", symbol: "00878", shares: 50000, perShare: 0.3, amount: 15000 },
-    { id: uid(), date: "2021-11-01", symbol: "00878", shares: 65000, perShare: 0.28, amount: 18200 },
-    { id: uid(), date: "2022-02-01", symbol: "00878", shares: 87000, perShare: 0.3, amount: 26100 },
-    { id: uid(), date: "2022-05-01", symbol: "00878", shares: 97000, perShare: 0.32, amount: 31040 },
-    { id: uid(), date: "2022-08-01", symbol: "00878", shares: 97000, perShare: 0.28, amount: 27160 },
-    { id: uid(), date: "2022-11-01", symbol: "00878", shares: 99000, perShare: 0.28, amount: 27720 },
-    { id: uid(), date: "2023-02-01", symbol: "00878", shares: 99000, perShare: 0.27, amount: 26730 },
-    { id: uid(), date: "2023-05-01", symbol: "00878", shares: 99000, perShare: 0.27, amount: 26730 },
-    { id: uid(), date: "2023-08-01", symbol: "00878", shares: 99000, perShare: 0.35, amount: 34650 },
-    { id: uid(), date: "2023-11-01", symbol: "00878", shares: 101000, perShare: 0.35, amount: 35350 },
-    { id: uid(), date: "2024-02-01", symbol: "00878", shares: 106000, perShare: 0.4, amount: 42400 },
-    { id: uid(), date: "2024-05-01", symbol: "00878", shares: 110000, perShare: 0.51, amount: 56100 },
-    { id: uid(), date: "2024-08-01", symbol: "00878", shares: 111000, perShare: 0.55, amount: 61050 },
-    { id: uid(), date: "2024-11-01", symbol: "00878", shares: 111000, perShare: 0.55, amount: 61050 },
-    { id: uid(), date: "2025-01-01", symbol: "0056", shares: 86000, perShare: 1.07, amount: 92020 },
-    { id: uid(), date: "2025-04-01", symbol: "0056", shares: 88350, perShare: 1.07, amount: 94534 },
-    { id: uid(), date: "2025-07-01", symbol: "0056", shares: 87944, perShare: 0.87, amount: 76511 },
-    { id: uid(), date: "2025-10-01", symbol: "0056", shares: 87595, perShare: 0.87, amount: 76208 },
-    { id: uid(), date: "2026-01-01", symbol: "0056", shares: 87595, perShare: 0.87, amount: 76208 },
-    { id: uid(), date: "2026-04-01", symbol: "0056", shares: 88062, perShare: 1, amount: 88062 },
-    { id: uid(), date: "2026-07-01", symbol: "0056", shares: 89736, perShare: 1.35, amount: 121144 },
-  ];
+  // 乾淨版：不內建個人配息紀錄，請自行於「配息」新增
+  return [];
 }
 function defaultDailyRecords() {
   return DAILY_SEED.map((r) => ({ id: uid(), ...r }));
 }
 function defaultPlan() {
-  return [
-    { id: uid(), symbol: "0050", amount: 40000, note: "核心分散" },
-    { id: uid(), symbol: "0056", amount: 30000, note: "股息型，衝100張" },
-    { id: uid(), symbol: "VOO", amount: 25000, note: "標普500" },
-  ];
+  // 乾淨版：不內建個人定期定額配置，請自行於「計畫設定」新增
+  return [];
 }
 function defaultPlanSchedule() {
+  // 乾淨版：不內建個人資本規劃，請自行於「計畫設定」調整
   return {
-    startDate: "2025-07-01",
-    initialCapital: 2496327,
-    monthlyAmount: 95000,
-    annualReturn: 11,
-    horizonMonths: 108,
+    startDate: todayStr(),
+    initialCapital: 0,
+    monthlyAmount: 0,
+    annualReturn: 8,
+    horizonMonths: 120,
   };
 }
 
