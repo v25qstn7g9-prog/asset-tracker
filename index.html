@@ -102,7 +102,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.13.2";
+const APP_VERSION = "4.6-personal-v2.13.3";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -837,7 +837,15 @@ function Header({ goal, totalToday, goalDate }) {
       className="px-4 pb-3"
       style={{
         borderBottom: `1px solid ${COLORS.panelBorder}`,
-        paddingTop: "calc(env(safe-area-inset-top, 0px) - 4px)",
+        // Header padding-top only needs to clear the safe-area notch/Dynamic
+        // Island, not reproduce its full height as blank space above the
+        // title. `env(safe-area-inset-top)` on iPhones with a notch/Dynamic
+        // Island is typically 44–59px — subtracting only 4px left roughly a
+        // line and a half of dead space above "存股資產追蹤". Subtracting
+        // more claws that back, while `max(4px, ...)` keeps a small minimum
+        // gap on devices with zero safe-area inset (Android, older iPhones)
+        // so the title never touches the very top edge.
+        paddingTop: "max(4px, calc(env(safe-area-inset-top, 0px) - 20px))",
       }}
     >
       <div className="max-w-2xl mx-auto">
@@ -2035,7 +2043,7 @@ function TabBar({ tab, setTab }) {
           const active = tab === id;
           return (
             <button key={id} onClick={() => setTab(id)}
-              className="flex-1 flex flex-col items-center justify-center gap-0 py-1 px-0.5 min-w-0"
+              className="flex-1 flex flex-col items-center justify-center gap-0 py-0.5 px-0.5 min-w-0"
               style={{
                 color: active ? COLORS.gold : COLORS.sub,
                 borderTop: active ? `2px solid ${COLORS.gold}` : "2px solid transparent",
