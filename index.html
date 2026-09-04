@@ -705,10 +705,14 @@ function AssetTracker() {
       .sort((a, b) => a.date.localeCompare(b.date));
 
     let runningShares = 0, runningCost = 0;
+    let runningSharesNoFee = 0, runningCostNoFee = 0; // 不含手續費，算「平均成交價」用
     for (const t of symbolTrades) {
       if (t.action === "buy") {
         runningCost += t.shares * t.price + Number(t.fee || 0);
         runningShares += t.shares;
+
+        runningCostNoFee += t.shares * t.price;
+        runningSharesNoFee += t.shares;
       } else {
         if (runningShares > 0) {
           const avgPerShare = runningCost / runningShares;
@@ -716,9 +720,16 @@ function AssetTracker() {
           runningCost -= avgPerShare * sellShares;
           runningShares -= sellShares;
         }
+        if (runningSharesNoFee > 0) {
+          const avgPerShareNoFee = runningCostNoFee / runningSharesNoFee;
+          const sellSharesNoFee = Math.min(t.shares, runningSharesNoFee);
+          runningCostNoFee -= avgPerShareNoFee * sellSharesNoFee;
+          runningSharesNoFee -= sellSharesNoFee;
+        }
       }
     }
     const autoAvgCost = runningShares > 0 ? runningCost / runningShares : null;
+    const avgTradePrice = runningSharesNoFee > 0 ? runningCostNoFee / runningSharesNoFee : null; // 不含手續費的成交均價
 
     // 若有手動填「平均成本」，優先用手動值；否則用交易紀錄自動算出的均價。
     // 持有成本一律用這個平均成本 × 目前股數算出，兩個數字才會對得起來。
@@ -727,7 +738,7 @@ function AssetTracker() {
     const avgCost = hasManualAvgCost ? manualAvgCost : autoAvgCost;
     const estCostBasis = avgCost != null ? Math.round(avgCost * current) : null;
 
-    return { ...h, bought, sold, current, pct, avgCost, estCostBasis, isManualAvgCost: hasManualAvgCost };
+    return { ...h, bought, sold, current, pct, avgCost, estCostBasis, isManualAvgCost: hasManualAvgCost, avgTradePrice };
   }), [holdings, trades]);
 
   const planTotal = planItems.reduce((s, p) => s + Number(p.amount || 0), 0);
@@ -1696,6 +1707,11 @@ function HoldingsPanel({ holdings, setHoldings }) {
                     <div className="flex items-baseline gap-2">
                       <span className="font-bold mono">{h.symbol}</span>
                       <span className="text-[11px]" style={{ color: COLORS.sub }}>{h.name}</span>
+                      {h.avgTradePrice != null && (
+                        <span className="text-[11px] mono" style={{ color: COLORS.gold }}>
+                          均價 {h.avgTradePrice.toFixed(2)}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3">
                       <button onClick={() => startEdit(h)} style={{ color: COLORS.sub }}><PencilIcon size={15} /></button>
