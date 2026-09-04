@@ -694,7 +694,34 @@ function AssetTracker() {
       .reduce((s, t) => s + t.shares, 0);
     const current = h.initialShares + bought - sold;
     const pct = h.target2035 ? Math.min(100, (current / h.target2035) * 100) : 0;
-    return { ...h, bought, sold, current, pct };
+
+    // 用「移動加權平均法」依交易紀錄算出平均成本：
+    // 買進時把成本併入、股數增加；賣出時依當下平均成本按比例扣除。
+    // 注意：期初股數（initialShares）本身沒有記錄成本，這裡只根據交易紀錄計算，
+    // 所以「持有成本」是用交易算出的均價，去估算目前全部股數（含期初股數）的成本，僅供參考。
+    const symbolTrades = trades
+      .filter((t) => t.symbol === h.symbol)
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    let runningShares = 0, runningCost = 0;
+    for (const t of symbolTrades) {
+      if (t.action === "buy") {
+        runningCost += t.shares * t.price + Number(t.fee || 0);
+        runningShares += t.shares;
+      } else {
+        if (runningShares > 0) {
+          const avgPerShare = runningCost / runningShares;
+          const sellShares = Math.min(t.shares, runningShares);
+          runningCost -= avgPerShare * sellShares;
+          runningShares -= sellShares;
+        }
+      }
+    }
+    const avgCost = runningShares > 0 ? runningCost / runningShares : null;
+    const estCostBasis = avgCost != null ? Math.round(avgCost * current) : null;
+
+    return { ...h, bought, sold, current, pct, avgCost, estCostBasis };
   }), [holdings, trades]);
 
   const planTotal = planItems.reduce((s, p) => s + Number(p.amount || 0), 0);
@@ -1654,9 +1681,21 @@ function HoldingsPanel({ holdings, setHoldings }) {
                       <div className="font-bold mono">{h.symbol}</div>
                       <div className="text-[11px]" style={{ color: COLORS.sub }}>{h.name}</div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => startEdit(h)} style={{ color: COLORS.sub }}><PencilIcon size={15} /></button>
-                      <button onClick={() => remove(h.id)} style={{ color: COLORS.sub }}><TrashIcon size={15} /></button>
+                    <div className="flex items-start gap-3">
+                      <div className="text-right mono">
+                        <div className="text-xs font-bold" style={{ color: COLORS.gold }}>
+                          {h.avgCost != null ? `NT$ ${h.avgCost.toFixed(2)}` : "-"}
+                        </div>
+                        <div className="text-[10px]" style={{ color: COLORS.sub }}>平均成本</div>
+                        <div className="text-[11px] mt-0.5">
+                          {h.estCostBasis != null ? `NT$ ${nf(h.estCostBasis)}` : "-"}
+                        </div>
+                        <div className="text-[10px]" style={{ color: COLORS.sub }}>持有成本</div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => startEdit(h)} style={{ color: COLORS.sub }}><PencilIcon size={15} /></button>
+                        <button onClick={() => remove(h.id)} style={{ color: COLORS.sub }}><TrashIcon size={15} /></button>
+                      </div>
                     </div>
                   </div>
                   <div className="flex justify-between text-xs mono mt-2">
