@@ -1,21 +1,14 @@
 /**
- * news.js — 4.6-news-stable-4
+ * news.js — 4.6-news-stable-5
  *
- * 持股新聞摘要：改用 Yahoo Finance 的新聞搜尋端點（JSON，不是解析網頁），
- * 用「代號 + .TW 尾碼」查詢台股新聞，只回傳最近 windowHours 小時內的新聞，
- * 同一檔股票標題重複的只留一則，每檔最多回傳 maxPerSymbol 則。
- * 當天完全沒有新消息的股票，回應裡直接不會有那個 key，前端就不會顯示那張卡片。
- *
- * 用法：GET /news?symbols=0050,0056,2330&names=元大台灣50,元大高股息,台積電
- *       &windowHours=48（預設48，可調）&maxPerSymbol=3（預設3，可調）
- *
- * 換源記錄：原本用 Google News RSS，但 2026-09 起 Google 開始針對雲端機房 IP
- * （AWS/GCP/Cloudflare 這類巨量流量共用的 IP 段）做封鎖，Cloudflare Workers
- * 的對外 IP 全世界共用，導致持續收到 503，換 UA/重試都沒用，因此換成這個來源。
- * 這是 Yahoo 未公開文件化的端點，一樣有格式被調整的風險，保留 ?debug=1 方便排查。
+ * 持股新聞摘要：Yahoo Finance JSON 為主，Bing News RSS 為備援。
+ * - Yahoo query1 失敗/空資料 → query2 再試
+ * - Yahoo 仍失敗/空資料 → Bing News RSS（用代號 + 中文名稱搜尋）
+ * - 只回傳最近 windowHours 小時內的新聞、標題去重、每檔最多 maxPerSymbol 則
+ * - 保留 ?debug=1 方便檢查每檔實際使用來源與錯誤
  */
 
-const NEWS_VERSION = "4.6-news-stable-4";
+const NEWS_VERSION = "4.6-news-stable-5";
 const SYMBOL_PATTERN = /^[0-9A-Za-z.]{1,10}$/;
 
 function isAllowedSymbol(s) {
@@ -34,86 +27,149 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// 標題去重用的正規化key：去空白、去標點符號，避免同story被不同分發站重複列出。
 function normalizeTitleKey(title) {
-  return title
+  return String(title || "")
     .toLowerCase()
     .replace(/[\s\u3000]/g, "")
     .replace(/[，。！？、「」『』【】\-–—:：,.!?()（）\[\]]/g, "");
 }
 
-async function fetchJsonOnce(url, timeoutMs) {
+async function fetchOnce(url, timeoutMs, asText = false) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "accept": "application/json",
+        "accept": asText ? "application/rss+xml, application/xml, text/xml, */*" : "application/json",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return asText ? await res.text() : await res.json();
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug) {
-  // Yahoo Finance 用 .TW 尾碼代表台股（例如 2330.TW），用代號查比用公司名稱查更準，
-  // 回來的 news 陣列裡 relatedTickers 會對到這檔股票。
-  const yahooSymbol = `${symbol}.TW`;
-  const url =
-    `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(yahooSymbol)}` +
-    `&newsCount=${Math.min(30, maxPerSymbol * 5)}&quotesCount=0&lang=zh-Hant-TW&region=TW`;
-
-  let data;
+async function fetchJsonWithRetry(url) {
   try {
-    data = await fetchJsonOnce(url, 10000);
+    return await fetchOnce(url, 10000, false);
   } catch (e) {
-    // 503/502/504 這類常見暫時性錯誤重試一次。
     const msg = String(e?.message || "");
-    if (/HTTP (502|503|504)/.test(msg)) {
-      data = await fetchJsonOnce(url, 10000);
-    } else {
-      throw e;
+    if (/HTTP (429|500|502|503|504)/.test(msg)) {
+      return await fetchOnce(url, 10000, false);
     }
+    throw e;
   }
+}
 
+function yahooItemsFromData(data, cutoff, maxPerSymbol) {
   const rawItems = Array.isArray(data?.news) ? data.news : [];
-  const cutoff = Date.now() - windowHours * 3600 * 1000;
-
   const seen = new Set();
   const items = [];
-  const debugRaw = [];
 
   for (const item of rawItems) {
-    const rawTitle = String(item?.title || "").trim();
-    const link = String(item?.link || "");
+    const title = String(item?.title || "").trim();
+    const link = String(item?.link || "").trim();
     const source = item?.publisher || null;
     const pubMs = item?.providerPublishTime ? Number(item.providerPublishTime) * 1000 : null;
 
-    if (debug) debugRaw.push({ rawTitle, pubMs, source });
-
-    if (pubMs == null || isNaN(pubMs) || pubMs < cutoff) continue; // 太舊，跳過
-    if (!rawTitle) continue;
-
-    const key = normalizeTitleKey(rawTitle);
-    if (seen.has(key)) continue; // 標題重複，跳過
+    if (!title || !link || pubMs == null || Number.isNaN(pubMs) || pubMs < cutoff) continue;
+    const key = normalizeTitleKey(title);
+    if (!key || seen.has(key)) continue;
     seen.add(key);
 
-    items.push({
-      title: rawTitle,
-      link,
-      source: source || null,
-      pubDate: new Date(pubMs).toISOString(),
-    });
-
+    items.push({ title, link, source, pubDate: new Date(pubMs).toISOString() });
     if (items.length >= maxPerSymbol) break;
   }
 
-  return debug ? { items, debugRaw, rawCount: rawItems.length } : { items };
+  return { items, rawCount: rawItems.length };
+}
+
+function decodeXml(s) {
+  return String(s || "")
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .trim();
+}
+
+function xmlTag(block, tag) {
+  const m = block.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return m ? decodeXml(m[1]) : "";
+}
+
+function bingItemsFromXml(xml, cutoff, maxPerSymbol) {
+  const blocks = String(xml || "").match(/<item\b[\s\S]*?<\/item>/gi) || [];
+  const seen = new Set();
+  const items = [];
+
+  for (const block of blocks) {
+    const title = xmlTag(block, "title");
+    const link = xmlTag(block, "link");
+    const pubRaw = xmlTag(block, "pubDate");
+    const pubMs = Date.parse(pubRaw);
+    if (!title || !link || !Number.isFinite(pubMs) || pubMs < cutoff) continue;
+
+    const key = normalizeTitleKey(title);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    items.push({ title, link, source: "Bing News", pubDate: new Date(pubMs).toISOString() });
+    if (items.length >= maxPerSymbol) break;
+  }
+
+  return { items, rawCount: blocks.length };
+}
+
+async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug) {
+  const cutoff = Date.now() - windowHours * 3600 * 1000;
+  const yahooSymbol = `${symbol}.TW`;
+  const newsCount = Math.min(30, Math.max(10, maxPerSymbol * 5));
+  const attempts = [];
+
+  // 1) Yahoo query1
+  const yahoo1 = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(yahooSymbol)}` +
+    `&newsCount=${newsCount}&quotesCount=0&lang=zh-Hant-TW&region=TW`;
+  try {
+    const data = await fetchJsonWithRetry(yahoo1);
+    const parsed = yahooItemsFromData(data, cutoff, maxPerSymbol);
+    attempts.push({ source: "yahoo-query1", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
+    if (parsed.items.length) return debug ? { ...parsed, sourceUsed: "yahoo-query1", attempts } : { items: parsed.items };
+  } catch (e) {
+    attempts.push({ source: "yahoo-query1", ok: false, error: String(e?.message || e) });
+  }
+
+  // 2) Yahoo query2（同服務另一個 host，Cloudflare 對外路徑偶爾不同）
+  const yahoo2 = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(yahooSymbol)}` +
+    `&newsCount=${newsCount}&quotesCount=0&lang=zh-Hant-TW&region=TW`;
+  try {
+    const data = await fetchJsonWithRetry(yahoo2);
+    const parsed = yahooItemsFromData(data, cutoff, maxPerSymbol);
+    attempts.push({ source: "yahoo-query2", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
+    if (parsed.items.length) return debug ? { ...parsed, sourceUsed: "yahoo-query2", attempts } : { items: parsed.items };
+  } catch (e) {
+    attempts.push({ source: "yahoo-query2", ok: false, error: String(e?.message || e) });
+  }
+
+  // 3) Bing News RSS 備援。中文名稱對 ETF/台股通常比只用 ticker 更容易找到新聞。
+  const query = [symbol, name].filter(Boolean).join(" ");
+  const bingUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(query)}` +
+    `&format=rss&mkt=zh-TW&setlang=zh-Hant`;
+  try {
+    const xml = await fetchOnce(bingUrl, 10000, true);
+    const parsed = bingItemsFromXml(xml, cutoff, maxPerSymbol);
+    attempts.push({ source: "bing-rss", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
+    return debug ? { ...parsed, sourceUsed: parsed.items.length ? "bing-rss" : "none", attempts } : { items: parsed.items };
+  } catch (e) {
+    attempts.push({ source: "bing-rss", ok: false, error: String(e?.message || e) });
+    return debug ? { items: [], rawCount: 0, sourceUsed: "none", attempts } : { items: [] };
+  }
 }
 
 export async function onRequestGet(context) {
@@ -122,15 +178,13 @@ export async function onRequestGet(context) {
 
     const symbols = (url.searchParams.get("symbols") || "")
       .split(",").map((s) => s.trim().toUpperCase()).filter(Boolean).filter(isAllowedSymbol);
-
     const names = (url.searchParams.get("names") || "")
       .split(",").map((s) => s.trim());
 
-    if (!symbols.length) {
-      return jsonResponse({ error: "沒有提供股票代號" }, 400);
-    }
+    if (!symbols.length) return jsonResponse({ error: "沒有提供股票代號" }, 400);
 
-    const windowHours = Math.min(168, Math.max(1, Number(url.searchParams.get("windowHours")) || 48));
+    // 預設 72 小時，避免週末/休市時剛好 48 小時內沒有個股新聞，整張卡片消失。
+    const windowHours = Math.min(168, Math.max(1, Number(url.searchParams.get("windowHours")) || 72));
     const maxPerSymbol = Math.min(10, Math.max(1, Number(url.searchParams.get("maxPerSymbol")) || 3));
     const debug = url.searchParams.get("debug") === "1";
 
@@ -145,8 +199,12 @@ export async function onRequestGet(context) {
     results.forEach((r, i) => {
       const sym = symbols[i];
       if (r.status === "fulfilled") {
-        if (r.value.items.length > 0) news[sym] = r.value.items; // 沒有新消息就不放進去，前端不顯示
-        if (debug) debugInfo[sym] = { rawCount: r.value.rawCount, debugRaw: r.value.debugRaw };
+        if (r.value.items.length > 0) news[sym] = r.value.items;
+        if (debug) debugInfo[sym] = {
+          sourceUsed: r.value.sourceUsed,
+          rawCount: r.value.rawCount,
+          attempts: r.value.attempts,
+        };
       } else {
         warnings.push(`${sym}: ${r.reason?.message || r.reason}`);
       }
