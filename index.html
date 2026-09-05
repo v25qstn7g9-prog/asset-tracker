@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0A0F1C" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,6 +13,10 @@
   <style>
     html,body,#root { margin:0; min-height:100%; background:#0A0F1C; }
     body { overscroll-behavior-y:none; }
+    /* 手機瀏覽器網址列收合/展開時，100vh 會跟著重新計算導致畫面一直跳動；
+       改用 100svh（永遠抓最小可視高度，不受網址列狀態影響）比較穩定。
+       不支援 svh 的舊瀏覽器會忽略這行，自動退回 Tailwind 原本的 100vh。 */
+    .min-h-screen { min-height: 100svh !important; }
     #boot-error {
       display:none; position:fixed; inset:0; z-index:99999; padding:24px;
       background:#0A0F1C; color:#E9EEF7; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -2475,7 +2479,7 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested }) {
         <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: "rgba(0,0,0,0.5)" }}
           onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
           <div className="flex flex-col rounded-t-2xl" style={{
-            background: COLORS.bg, height: "65vh", boxShadow: "0 -8px 24px rgba(0,0,0,0.4)",
+            background: COLORS.bg, height: "65svh", boxShadow: "0 -8px 24px rgba(0,0,0,0.4)",
           }}>
             <div className="flex items-center justify-between px-4 py-3"
               style={{ borderBottom: `1px solid ${COLORS.panelBorder}` }}>
