@@ -23,7 +23,7 @@
  * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
  */
 
-const ASK_VERSION = "4.6-ask-free-9";
+const ASK_VERSION = "4.6-ask-free-11";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_TURNS = 16; // 多保留一些上下文，讓短句/代名詞也能接得上前文
 
@@ -53,16 +53,27 @@ const SYSTEM_PROMPT_BASE = `你是內嵌在一個個人存股資產追蹤 App �
 改動任何資料，一定要透過工具呼叫，讓 App 顯示確認卡片給使用者按確定才會真的生效。
 如果使用者給的資訊不夠（例如沒說股數或價格），先用文字問清楚，不要用工具呼叫瞎猜數字。
 
-另外有 get_trade_history、get_daily_records、get_dividend_history、get_holding_cost_asof
-這 4 個「查詢」工具，是唯讀的，不會跳確認卡片、不會有任何風險，可以直接呼叫。平常給你的
-摘要只有每檔最近20筆交易/每日紀錄/配息、以及「現在」的持股成本，遇到使用者問的問題需要
-更完整的歷史資料或「過去某個時間點」的數字才能準確回答時（例如「幫我分析全部交易」
-「07/30到現在我的本金增加多少」「我今年初xx股票的成本是多少」這種摘要看不到的問題），
-直接主動呼叫對應的查詢工具去要更多資料，不用叫使用者自己貼資料給你。
-問「現在」的持股成本不用呼叫 get_holding_cost_asof，摘要裡已經有了；
-問「過去某個日期」的持股成本才需要呼叫這個工具、並帶上那個日期。
-問「某段期間本金/資產變化」用 get_daily_records 帶 fromDate/toDate 查該區間頭尾兩天的紀錄，
-用兩天的差去算，不要用假設值瞎猜。
+另外有 query_app_data 這個通用唯讀查詢工具，可以查每日資產/本金、交易、配息，
+以及某檔股票在過去日期的持有成本。這是唯讀的，不會跳確認卡片、不會有任何風險，
+可以直接呼叫，不用等使用者教你怎麼查、也不要叫他自己翻頁或貼資料給你。
+
+【重要：查詢結果都已經算好，你不用也不可以自己動手算】
+query_app_data 回傳的每一種彙總方式（start_end 頭尾差額、monthly 每月變化、
+min_max 找漲最多跌最多的月份）都是用程式碼精算好的結果，你只需要決定要查什麼、
+再把拿到的數字組織成自然的回答，絕對不要把 aggregation=records 查到的一堆原始
+明細自己拿去手動加減比較大小——那樣很容易看錯或抄錯數字，算出跟事實不符的答案。
+有現成的彙總方式可以拿到答案，就一定要用那個，不要自己算。
+
+用法舉例：
+- 「現在」的持股成本不用查，摘要裡已經有了；「過去某個日期」的成本才用
+  source=holding_cost 帶 symbol+asOfDate。
+- 「從A到B資產/本金/損益變化多少」用 source=daily_records、aggregation=start_end
+  帶 fromDate/toDate，直接拿到算好的差額，不要自己相減。
+- 「今年哪個月資產掉最多」這類問題用 source=daily_records、aggregation=min_max。
+- 想看月度趨勢用 aggregation=monthly；要看原始紀錄、瀏覽明細才用 records。
+- 查交易用 source=trades；查配息用 source=dividends；兩者統計數字用
+  aggregation=summary（一樣是算好的），列表才用 records。
+- 你可以連續查詢多次：先查一份，再依結果決定要不要查第二份來比較或補充。
 
 這是手機上的小聊天視窗，回答簡潔清楚、口氣自然就好，不用太拘謹，但也不要為了顯得
 活潑而扯不相關的話或加一堆語助詞。如果使用者用很短的句子、代名詞、省略句，
@@ -162,71 +173,50 @@ const TOOLS = [
       },
     },
   },
-  // 以下 3 個是「唯讀查詢」工具，不會跳確認卡片，會自動執行並把結果拿回來讓你回答 ——
-  // 平常給的摘要只有每檔最近 20 筆交易/每日紀錄/配息，遇到需要更完整歷史資料的問題
-  // （例如「幫我分析全部交易紀錄」）就主動呼叫這些工具去要更多，不用使用者自己貼資料。
+  // 唯讀查詢：AI 自己決定要查哪個來源、什麼區間、用哪種彙總方式，不用每多一種問法
+  // 就替它加一個專用工具。重要：所有彙總（monthly/min_max/start_end/summary）都是
+  // 前端用程式碼算好才回傳給你，你只要決定要查什麼、以及怎麼把結果講出來，
+  // 絕對不要自己把 records 原始明細拿去手動加減比較——那樣容易抄錯數字算錯，
+  // 有現成的彙總方式可以拿到已經算好的答案，就不要自己動手算。
   {
     type: "function",
     function: {
-      name: "get_trade_history",
-      description: "取得某檔股票更完整的交易紀錄（平常摘要只給最近20筆，需要分析全部歷史或找特定舊交易時使用）",
+      name: "query_app_data",
+      description: "通用唯讀資料查詢。可查每日資產/本金、交易、配息、過去日期持有成本；需要歷史數字、區間比較、月度趨勢、高低點或完整明細時主動使用，不用等使用者教你怎麼查。",
       parameters: {
         type: "object",
         properties: {
-          symbol: { type: "string", description: "股票代號" },
-          limit: { type: "number", description: "最多回傳幾筆，預設100，最多200" },
+          source: {
+            type: "string",
+            enum: ["daily_records", "trades", "dividends", "holding_cost"],
+            description: "要查的資料來源",
+          },
+          fromDate: { type: "string", description: "起始日期 YYYY-MM-DD；區間查詢可用，不填代表從最早開始" },
+          toDate: { type: "string", description: "結束日期 YYYY-MM-DD；不填可視為到今天" },
+          asOfDate: { type: "string", description: "holding_cost 專用：計算到這一天為止（含當天）" },
+          symbol: { type: "string", description: "股票代號；trades/dividends/holding_cost 可用，holding_cost 必填" },
+          aggregation: {
+            type: "string",
+            enum: ["records", "start_end", "monthly", "min_max", "summary"],
+            description: "daily_records 可用 records(原始明細)/start_end(頭尾兩天差額，已算好)/monthly(每月變化，已算好)/min_max(區間內漲最多跌最多的月份，已算好)；trades/dividends 建議 records 或 summary(已算好的統計)；holding_cost 不用填",
+          },
+          fields: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["totalAsset", "totalCost", "totalGain", "twValue", "usValue", "twCost", "usCost", "twGain", "usGain"],
+            },
+            description: "daily_records 想特別關注的欄位（例如只看 twValue）；min_max 用第一個欄位當比較依據，不填預設用 totalGain（市場報酬）",
+          },
+          limit: { type: "number", description: "records 最多回傳幾筆，預設120，最多200" },
         },
-        required: ["symbol"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_daily_records",
-      description: "取得更長時間範圍的每日資產紀錄，包含投入成本（平常摘要只給最近20筆）。可指定日期區間查詢，適合回答「某段期間本金增加多少」這類問題。",
-      parameters: {
-        type: "object",
-        properties: {
-          days: { type: "number", description: "取最近幾天的紀錄，預設90，最多365；如果有指定 fromDate/toDate 就不用填這個" },
-          fromDate: { type: "string", description: "起始日期 YYYY-MM-DD，要查特定區間時使用" },
-          toDate: { type: "string", description: "結束日期 YYYY-MM-DD，要查特定區間時使用，沒填就預設到今天" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_dividend_history",
-      description: "取得更完整的配息紀錄（平常摘要只給最近20筆），可指定股票代號篩選",
-      parameters: {
-        type: "object",
-        properties: {
-          symbol: { type: "string", description: "股票代號，不指定就回傳全部股票的配息" },
-          limit: { type: "number", description: "最多回傳幾筆，預設100，最多200" },
-        },
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_holding_cost_asof",
-      description: "計算某檔股票在「特定過去日期當下」的股數、平均成本、總成本（用該日期之前的交易紀錄現算），適合回答「某年某月我的xx成本是多少」這種歷史時間點的問題，而不是問現在的成本（現在的成本已經在持股摘要裡了，不用呼叫這個）",
-      parameters: {
-        type: "object",
-        properties: {
-          symbol: { type: "string", description: "股票代號" },
-          asOfDate: { type: "string", description: "計算到這天為止（含當天）的股數與成本，格式 YYYY-MM-DD" },
-        },
-        required: ["symbol", "asOfDate"],
+        required: ["source"],
       },
     },
   },
 ];
 
-const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history", "get_holding_cost_asof"];
+const READ_TOOL_NAMES = ["query_app_data"];
 
 export async function onRequestPost(context) {
   try {
