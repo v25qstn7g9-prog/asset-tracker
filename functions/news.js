@@ -1,20 +1,21 @@
 /**
- * news.js — 4.6-news-stable-1
+ * news.js — 4.6-news-stable-4
  *
- * 持股新聞摘要：用 Google News RSS（news.google.com/rss/search）依「代號 + 名稱」查詢，
- * 只回傳最近 windowHours 小時內的新聞，同一檔股票標題重複的只留一則，
- * 每檔最多回傳 maxPerSymbol 則。當天完全沒有新消息的股票，回應裡直接不會有那個 key，
- * 前端就不會顯示那張卡片。
+ * 持股新聞摘要：改用 Yahoo Finance 的新聞搜尋端點（JSON，不是解析網頁），
+ * 用「代號 + .TW 尾碼」查詢台股新聞，只回傳最近 windowHours 小時內的新聞，
+ * 同一檔股票標題重複的只留一則，每檔最多回傳 maxPerSymbol 則。
+ * 當天完全沒有新消息的股票，回應裡直接不會有那個 key，前端就不會顯示那張卡片。
  *
  * 用法：GET /news?symbols=0050,0056,2330&names=元大台灣50,元大高股息,台積電
  *       &windowHours=48（預設48，可調）&maxPerSymbol=3（預設3，可調）
  *
- * 注意：Google News RSS 是 Google 開放的訂閱端點（回傳結構化 XML），
- * 不是去解析會跑 JS 的 news.google.com 網頁本身；但仍屬於非官方文件化的端點，
- * 格式理論上可能被 Google 調整，因此保留 ?debug=1 方便排查。
+ * 換源記錄：原本用 Google News RSS，但 2026-09 起 Google 開始針對雲端機房 IP
+ * （AWS/GCP/Cloudflare 這類巨量流量共用的 IP 段）做封鎖，Cloudflare Workers
+ * 的對外 IP 全世界共用，導致持續收到 503，換 UA/重試都沒用，因此換成這個來源。
+ * 這是 Yahoo 未公開文件化的端點，一樣有格式被調整的風險，保留 ?debug=1 方便排查。
  */
 
-const NEWS_VERSION = "4.6-news-stable-3";
+const NEWS_VERSION = "4.6-news-stable-4";
 const SYMBOL_PATTERN = /^[0-9A-Za-z.]{1,10}$/;
 
 function isAllowedSymbol(s) {
@@ -33,34 +34,7 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-function decodeEntities(str) {
-  if (!str) return "";
-  return str
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/, "$1")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)))
-    .trim();
-}
-
-function extractTag(block, tag) {
-  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
-  const m = block.match(re);
-  return m ? decodeEntities(m[1]) : "";
-}
-
-// 標題常常長這樣："某某headline - 發布來源"，跟 <source> 內容重複，去掉尾巴的來源名稱。
-function stripTrailingSource(title, source) {
-  if (!source) return title;
-  const suffix = ` - ${source}`;
-  return title.endsWith(suffix) ? title.slice(0, -suffix.length).trim() : title;
-}
-
-// 標題去重用的正規化key：去空白、去標點符號、轉半形，避免同story被不同分發站重複列出。
+// 標題去重用的正規化key：去空白、去標點符號，避免同story被不同分發站重複列出。
 function normalizeTitleKey(title) {
   return title
     .toLowerCase()
@@ -68,81 +42,75 @@ function normalizeTitleKey(title) {
     .replace(/[，。！？、「」『』【】\-–—:：,.!?()（）\[\]]/g, "");
 }
 
-async function fetchRssOnce(url, timeoutMs) {
+async function fetchJsonOnce(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        // 用比較像真實瀏覽器的 UA，原本那個自訂字串（StockTracker/4.6-news）
-        // 容易被 Google 判定成機器人流量而回傳 503，換成常見瀏覽器 UA 降低被擋機率。
+        "accept": "application/json",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "accept-language": "zh-TW,zh;q=0.9,en;q=0.8",
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
+    return await res.json();
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug) {
-  const query = name ? `${symbol} ${name}` : symbol;
+  // Yahoo Finance 用 .TW 尾碼代表台股（例如 2330.TW），用代號查比用公司名稱查更準，
+  // 回來的 news 陣列裡 relatedTickers 會對到這檔股票。
+  const yahooSymbol = `${symbol}.TW`;
   const url =
-    `https://news.google.com/rss/search?q=${encodeURIComponent(query)}` +
-    `&hl=zh-TW&gl=TW&ceid=TW:zh-Hant`;
+    `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(yahooSymbol)}` +
+    `&newsCount=${Math.min(30, maxPerSymbol * 5)}&quotesCount=0&lang=zh-Hant-TW&region=TW`;
 
-  let xml;
+  let data;
   try {
-    xml = await fetchRssOnce(url, 10000);
+    data = await fetchJsonOnce(url, 10000);
   } catch (e) {
-    // 503/502/504 這類常見暫時性錯誤重試一次，給 Google 那邊多一次機會回應。
+    // 503/502/504 這類常見暫時性錯誤重試一次。
     const msg = String(e?.message || "");
     if (/HTTP (502|503|504)/.test(msg)) {
-      xml = await fetchRssOnce(url, 10000);
+      data = await fetchJsonOnce(url, 10000);
     } else {
       throw e;
     }
   }
 
-  const rawItems = xml.split("<item>").slice(1).map((s) => s.split("</item>")[0]);
+  const rawItems = Array.isArray(data?.news) ? data.news : [];
   const cutoff = Date.now() - windowHours * 3600 * 1000;
 
   const seen = new Set();
   const items = [];
   const debugRaw = [];
 
-  for (const block of rawItems) {
-    const rawTitle = extractTag(block, "title");
-    const link = extractTag(block, "link");
-    const pubDateStr = extractTag(block, "pubDate");
-    const source = extractTag(block, "source");
+  for (const item of rawItems) {
+    const rawTitle = String(item?.title || "").trim();
+    const link = String(item?.link || "");
+    const source = item?.publisher || null;
+    const pubMs = item?.providerPublishTime ? Number(item.providerPublishTime) * 1000 : null;
 
-    const pubDate = pubDateStr ? new Date(pubDateStr) : null;
-    const pubMs = pubDate && !isNaN(pubDate.getTime()) ? pubDate.getTime() : null;
+    if (debug) debugRaw.push({ rawTitle, pubMs, source });
 
-    if (debug) debugRaw.push({ rawTitle, pubDateStr, pubMs, source });
+    if (pubMs == null || isNaN(pubMs) || pubMs < cutoff) continue; // 太舊，跳過
+    if (!rawTitle) continue;
 
-    if (pubMs == null || pubMs < cutoff) continue; // 太舊，跳過
-
-    const title = stripTrailingSource(rawTitle, source);
-    if (!title) continue;
-
-    const key = normalizeTitleKey(title);
+    const key = normalizeTitleKey(rawTitle);
     if (seen.has(key)) continue; // 標題重複，跳過
     seen.add(key);
 
     items.push({
-      title,
+      title: rawTitle,
       link,
       source: source || null,
       pubDate: new Date(pubMs).toISOString(),
     });
 
-    if (items.length >= maxPerSymbol) break; // Google News 本身依相關性/時間排序，取前N則即可
+    if (items.length >= maxPerSymbol) break;
   }
 
   return debug ? { items, debugRaw, rawCount: rawItems.length } : { items };
