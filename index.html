@@ -1774,6 +1774,10 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
       assetChange: toValue - fromValue,
       costChange: toCost - fromCost,
       gainChange: (toValue - toCost) - (fromValue - fromCost),
+      twValueChange: (toRec.twValue || 0) - (fromRec.twValue || 0),
+      usValueChange: (toRec.usValue || 0) - (fromRec.usValue || 0),
+      twCostChange: (toRec.twCost || 0) - (fromRec.twCost || 0),
+      usCostChange: (toRec.usCost || 0) - (fromRec.usCost || 0),
     };
   })() : null;
 
@@ -1823,13 +1827,13 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
                 ? "（其中一天沒有剛好的紀錄，取最近一筆較早的紀錄代替）" : ""}
             </div>
             <div className="flex justify-between">
-              <span style={{ color: COLORS.sub }}>資產變化</span>
+              <span style={{ color: COLORS.sub }}>總市值變化</span>
               <span className="font-bold" style={{ color: rangeResult.assetChange >= 0 ? COLORS.gain : COLORS.loss }}>
                 {rangeResult.assetChange >= 0 ? "+" : ""}{nf(rangeResult.assetChange)}
               </span>
             </div>
             <div className="flex justify-between">
-              <span style={{ color: COLORS.sub }}>本金變化</span>
+              <span style={{ color: COLORS.sub }}>總本金變化</span>
               <span className="font-bold" style={{ color: COLORS.gold }}>
                 {rangeResult.costChange >= 0 ? "+" : ""}{nf(rangeResult.costChange)}
               </span>
@@ -1838,6 +1842,31 @@ function DailyPanel({ records, setRecords, prefill, form, setForm }) {
               <span style={{ color: COLORS.sub }}>損益變化（市場報酬）</span>
               <span className="font-bold" style={{ color: rangeResult.gainChange >= 0 ? COLORS.gain : COLORS.loss }}>
                 {rangeResult.gainChange >= 0 ? "+" : ""}{nf(rangeResult.gainChange)}
+              </span>
+            </div>
+            <div style={{ borderTop: `1px solid ${COLORS.panelBorder}`, margin: "6px 0" }} />
+            <div className="flex justify-between">
+              <span style={{ color: COLORS.sub }}>台股市值變化</span>
+              <span className="font-bold" style={{ color: rangeResult.twValueChange >= 0 ? COLORS.gain : COLORS.loss }}>
+                {rangeResult.twValueChange >= 0 ? "+" : ""}{nf(rangeResult.twValueChange)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: COLORS.sub }}>台股本金變化</span>
+              <span className="font-bold" style={{ color: COLORS.gold }}>
+                {rangeResult.twCostChange >= 0 ? "+" : ""}{nf(rangeResult.twCostChange)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: COLORS.sub }}>美股市值變化</span>
+              <span className="font-bold" style={{ color: rangeResult.usValueChange >= 0 ? COLORS.gain : COLORS.loss }}>
+                {rangeResult.usValueChange >= 0 ? "+" : ""}{nf(rangeResult.usValueChange)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: COLORS.sub }}>美股本金變化</span>
+              <span className="font-bold" style={{ color: COLORS.gold }}>
+                {rangeResult.usCostChange >= 0 ? "+" : ""}{nf(rangeResult.usCostChange)}
               </span>
             </div>
           </div>
@@ -2639,114 +2668,194 @@ function validateToolCall(tc) {
   }
 }
 
-const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history", "get_holding_cost_asof", "calc_date_range"];
+const READ_TOOL_NAMES = ["query_app_data"];
 
-// 唯讀查詢工具的實際執行：直接從目前 App 的資料裡撈，完全不會動到任何資料，
-// 所以不用跳確認卡片，AI 要用就自動給它，讓它有辦法回答超出預設摘要範圍的問題。
+// 每日紀錄單筆算出所有欄位（總資產/總本金/損益 + 台美股個別），query_app_data 的
+// 每一種 daily_records 彙總方式都是拿這個函式的結果去加減比較，AI 完全不用自己算。
+function dailyRecordFields(r, fieldsFilter) {
+  const twValue = r.twValue || 0, usValue = r.usValue || 0;
+  const twCost = r.twCost || 0, usCost = r.usCost || 0;
+  const all = {
+    totalAsset: twValue + usValue,
+    totalCost: twCost + usCost,
+    totalGain: (twValue + usValue) - (twCost + usCost),
+    twValue, usValue, twCost, usCost,
+    twGain: twValue - twCost,
+    usGain: usValue - usCost,
+  };
+  if (Array.isArray(fieldsFilter) && fieldsFilter.length) {
+    const picked = {};
+    fieldsFilter.forEach((f) => { if (f in all) picked[f] = all[f]; });
+    return picked;
+  }
+  return all;
+}
+const fmtFieldLine = (obj, signed) => Object.entries(obj)
+  .map(([k, v]) => `${k}=${signed && v >= 0 ? "+" : ""}${nf(Math.round(v))}`)
+  .join(", ");
+
+// 唯讀查詢工具的實際執行：直接從目前 App 的資料裡撈、用程式碼算，完全不會動到任何資料，
+// 所以不用跳確認卡片，AI 要用就自動給它；每一種彙總方式都在這裡算好，AI 只負責決定
+// 要查什麼、怎麼把結果講出來，不會有它自己動手算術抄錯數字的風險。
 function executeReadTool(tc, { trades, dailyRecords, dividends, holdings }) {
   const a = tc.arguments || {};
-  switch (tc.name) {
-    case "get_trade_history": {
-      const limit = Math.min(200, Number(a.limit) || 100);
-      const list = (trades || [])
-        .filter((t) => t.symbol === a.symbol)
-        .slice()
-        .sort((x, y) => x.date.localeCompare(y.date))
-        .slice(-limit);
-      if (!list.length) return `（${a.symbol} 沒有任何交易紀錄）`;
-      return list.map((t) => {
-        const fee = t.fee ? `，手續費${t.fee}` : "";
-        const tax = t.tax ? `，證交稅${t.tax}` : "";
-        return `${t.date} ${t.action === "buy" ? "買進" : "賣出"} ${t.shares}股 @NT$${t.price}${fee}${tax}`;
-      }).join("\n");
-    }
-    case "get_daily_records": {
-      let list = [...(dailyRecords || [])].sort((x, y) => x.date.localeCompare(y.date));
-      if (a.fromDate || a.toDate) {
-        // 指定日期區間查詢：適合「某段期間本金/資產變化」這種問題，直接給頭尾兩天精準比對。
-        if (a.fromDate) list = list.filter((r) => r.date >= a.fromDate);
-        if (a.toDate) list = list.filter((r) => r.date <= a.toDate);
-      } else {
-        const days = Math.min(365, Number(a.days) || 90);
-        list = list.slice(-days);
-      }
-      if (!list.length) return "（這個範圍沒有每日紀錄）";
-      return list.map((r) => {
-        const asset = (r.twValue || 0) + (r.usValue || 0);
-        const cost = (r.twCost || 0) + (r.usCost || 0);
-        return `${r.date} 資產NT$${nf(asset)}（台股${nf(r.twValue || 0)}+美股${nf(r.usValue || 0)}），` +
-          `投入成本NT$${nf(cost)}（台股${nf(r.twCost || 0)}+美股${nf(r.usCost || 0)}）`;
-      }).join("\n");
-    }
-    case "get_dividend_history": {
-      const limit = Math.min(200, Number(a.limit) || 100);
-      let list = [...(dividends || [])].sort((x, y) => x.date.localeCompare(y.date));
-      if (a.symbol) list = list.filter((d) => d.symbol === a.symbol);
-      list = list.slice(-limit);
-      if (!list.length) return "（沒有符合條件的配息紀錄）";
-      return list.map((d) => `${d.date} ${d.symbol} ${nf(d.shares)}股 @NT$${d.perShare}/股 = NT$${nf(d.amount)}`).join("\n");
-    }
-    case "get_holding_cost_asof": {
-      const h = (holdings || []).find((x) => x.symbol === a.symbol);
-      const initialShares = h ? Number(h.initialShares || 0) : 0;
-      const symbolTrades = (trades || [])
-        .filter((t) => t.symbol === a.symbol && t.date <= a.asOfDate)
-        .slice()
-        .sort((x, y) => x.date.localeCompare(y.date));
 
-      let shares = initialShares;
-      let cost = 0; // 期初股數的成本沒有記錄，這裡當作0，結果只反映交易紀錄部分
-      for (const t of symbolTrades) {
-        if (t.action === "buy") {
-          cost += t.shares * t.price + Number(t.fee || 0);
-          shares += t.shares;
-        } else if (shares > 0) {
-          const avgPerShare = cost / shares;
-          const sellShares = Math.min(t.shares, shares);
-          cost -= avgPerShare * sellShares;
-          shares -= sellShares;
-        }
-      }
-      const avgCost = shares > 0 ? cost / shares : null;
-      const caveat = initialShares > 0
-        ? "（注意：期初股數的成本沒有記錄，這個均價只反映交易紀錄部分，可能不完全準確）"
-        : "";
-      if (shares <= 0) return `截至${a.asOfDate}：${a.symbol} 股數為0或查無資料${caveat}`;
-      return `截至${a.asOfDate}：${a.symbol} 股數${nf(shares)}股，均價NT$${avgCost.toFixed(2)}，總成本NT$${nf(Math.round(cost))}${caveat}`;
+  if (tc.name !== "query_app_data") return null;
+
+  if (a.source === "daily_records") {
+    const sorted = [...(dailyRecords || [])].sort((x, y) => x.date.localeCompare(y.date));
+    if (!sorted.length) return "沒有任何每日紀錄";
+    const findAtOrBefore = (dateStr) => {
+      let found = null;
+      for (const r of sorted) { if (r.date <= dateStr) found = r; else break; }
+      return found;
+    };
+    const agg = a.aggregation || "records";
+
+    if (agg === "records") {
+      const inRange = sorted.filter((r) =>
+        (!a.fromDate || r.date >= a.fromDate) && (!a.toDate || r.date <= a.toDate));
+      const limit = Math.min(200, Number(a.limit) || 120);
+      const list = inRange.slice(-limit);
+      if (!list.length) return "這個範圍沒有每日紀錄";
+      return list.map((r) => `${r.date} ${fmtFieldLine(dailyRecordFields(r, a.fields))}`).join("\n");
     }
-    case "calc_date_range": {
-      // 跟「每日紀錄」頁面的區間查詢用同一套算法：找「這天或更早最近一筆」紀錄來比對，
-      // 這裡直接用程式碼算，AI 只是把結果講出來，不會有抄錯數字的風險。
-      const sorted = [...(dailyRecords || [])].sort((x, y) => x.date.localeCompare(y.date));
-      const findAtOrBefore = (dateStr) => {
-        let found = null;
-        for (const r of sorted) {
-          if (r.date <= dateStr) found = r; else break;
-        }
-        return found;
-      };
-      const fromRec = findAtOrBefore(a.fromDate);
-      const toRec = findAtOrBefore(a.toDate);
+
+    if (agg === "start_end") {
+      const fromRec = a.fromDate ? findAtOrBefore(a.fromDate) : sorted[0];
+      const toRec = a.toDate ? findAtOrBefore(a.toDate) : sorted[sorted.length - 1];
       if (!fromRec || !toRec) return "這個區間找不到對應的每日紀錄，無法計算";
-
-      const fromValue = fromRec.twValue + fromRec.usValue;
-      const toValue = toRec.twValue + toRec.usValue;
-      const fromCost = (fromRec.twCost || 0) + (fromRec.usCost || 0);
-      const toCost = (toRec.twCost || 0) + (toRec.usCost || 0);
-      const assetChange = toValue - fromValue;
-      const costChange = toCost - fromCost;
-      const gainChange = (toValue - toCost) - (fromValue - fromCost);
+      const f = dailyRecordFields(fromRec, a.fields), t = dailyRecordFields(toRec, a.fields);
+      const diffs = {};
+      Object.keys(t).forEach((k) => { diffs[k] = t[k] - f[k]; });
       const noteDates = (fromRec.date !== a.fromDate || toRec.date !== a.toDate)
-        ? `（其中一天沒有剛好${a.fromDate}或${a.toDate}的紀錄，實際比對用最近一筆較早的紀錄：${fromRec.date} → ${toRec.date}）`
-        : "";
-      return `${a.fromDate} 到 ${a.toDate}${noteDates}：\n` +
-        `資產變化：${assetChange >= 0 ? "+" : ""}NT$${nf(assetChange)}\n` +
-        `本金變化：${costChange >= 0 ? "+" : ""}NT$${nf(costChange)}\n` +
-        `損益變化（市場報酬）：${gainChange >= 0 ? "+" : ""}NT$${nf(gainChange)}`;
+        ? `（其中一天沒有剛好的紀錄，實際比對：${fromRec.date} → ${toRec.date}）` : "";
+      return `${a.fromDate || fromRec.date} 到 ${a.toDate || toRec.date}${noteDates} 變化：\n${fmtFieldLine(diffs, true)}`;
     }
-    default:
-      return null;
+
+    if (agg === "monthly") {
+      const byMonth = {};
+      sorted.forEach((r) => { byMonth[r.date.slice(0, 7)] = r; }); // 每月最後一筆
+      const allMonths = Object.keys(byMonth).sort();
+      const months = allMonths.filter((mk) =>
+        (!a.fromDate || mk >= a.fromDate.slice(0, 7)) && (!a.toDate || mk <= a.toDate.slice(0, 7)));
+      if (!months.length) return "這個區間沒有可用的月度資料";
+      const lines = months.map((mk) => {
+        const idx = allMonths.indexOf(mk);
+        if (idx <= 0) return `${mk}：最早紀錄，無前月可比較`;
+        const e = dailyRecordFields(byMonth[mk], a.fields);
+        const s = dailyRecordFields(byMonth[allMonths[idx - 1]], a.fields);
+        const diffs = {};
+        Object.keys(e).forEach((k) => { diffs[k] = e[k] - s[k]; });
+        return `${mk}：${fmtFieldLine(diffs, true)}`;
+      });
+      return lines.join("\n");
+    }
+
+    if (agg === "min_max") {
+      const byMonth = {};
+      sorted.forEach((r) => { byMonth[r.date.slice(0, 7)] = r; });
+      const allMonths = Object.keys(byMonth).sort();
+      const field = (Array.isArray(a.fields) && a.fields[0]) || "totalGain";
+      const changes = [];
+      for (let i = 1; i < allMonths.length; i++) {
+        const mk = allMonths[i];
+        if ((a.fromDate && mk < a.fromDate.slice(0, 7)) || (a.toDate && mk > a.toDate.slice(0, 7))) continue;
+        const e = dailyRecordFields(byMonth[mk]), s = dailyRecordFields(byMonth[allMonths[i - 1]]);
+        changes.push({ mk, change: (e[field] || 0) - (s[field] || 0) });
+      }
+      if (!changes.length) return "這個區間沒有足夠的資料可以比較（至少要橫跨兩個月）";
+      const max = changes.reduce((m, c) => (c.change > m.change ? c : m));
+      const min = changes.reduce((m, c) => (c.change < m.change ? c : m));
+      return `區間內依「${field}」比較：\n漲最多：${max.mk}（${max.change >= 0 ? "+" : ""}${nf(Math.round(max.change))}）\n` +
+        `跌最多：${min.mk}（${min.change >= 0 ? "+" : ""}${nf(Math.round(min.change))}）`;
+    }
+
+    if (agg === "summary") {
+      const inRange = sorted.filter((r) =>
+        (!a.fromDate || r.date >= a.fromDate) && (!a.toDate || r.date <= a.toDate));
+      if (!inRange.length) return "這個範圍沒有每日紀錄";
+      const first = dailyRecordFields(inRange[0], a.fields);
+      const last = dailyRecordFields(inRange[inRange.length - 1], a.fields);
+      const lines = Object.keys(last).map((k) => `${k}：${nf(Math.round(first[k]))} → ${nf(Math.round(last[k]))}`);
+      return `共 ${inRange.length} 筆紀錄，${inRange[0].date} → ${inRange[inRange.length - 1].date}\n${lines.join("\n")}`;
+    }
+
+    return `不支援的 aggregation：${agg}`;
   }
+
+  if (a.source === "trades") {
+    let list = (trades || []).slice();
+    if (a.symbol) list = list.filter((t) => t.symbol === a.symbol);
+    if (a.fromDate) list = list.filter((t) => t.date >= a.fromDate);
+    if (a.toDate) list = list.filter((t) => t.date <= a.toDate);
+    list.sort((x, y) => x.date.localeCompare(y.date));
+    if (!list.length) return "查無符合條件的交易紀錄";
+
+    if (a.aggregation === "summary") {
+      const buys = list.filter((t) => t.action === "buy");
+      const sells = list.filter((t) => t.action === "sell");
+      const buyShares = buys.reduce((s, t) => s + t.shares, 0);
+      const sellShares = sells.reduce((s, t) => s + t.shares, 0);
+      const buyAmount = buys.reduce((s, t) => s + t.amount, 0);
+      const sellAmount = sells.reduce((s, t) => s + t.amount, 0);
+      return `共${list.length}筆交易：買進${buys.length}筆共${nf(buyShares)}股（金額NT$${nf(buyAmount)}），` +
+        `賣出${sells.length}筆共${nf(sellShares)}股（金額NT$${nf(sellAmount)}）`;
+    }
+    const limit = Math.min(200, Number(a.limit) || 120);
+    return list.slice(-limit).map((t) => {
+      const fee = t.fee ? `，手續費${t.fee}` : "";
+      const tax = t.tax ? `，證交稅${t.tax}` : "";
+      return `${t.date} ${t.symbol} ${t.action === "buy" ? "買進" : "賣出"} ${t.shares}股 @NT$${t.price}${fee}${tax}`;
+    }).join("\n");
+  }
+
+  if (a.source === "dividends") {
+    let list = (dividends || []).slice();
+    if (a.symbol) list = list.filter((d) => d.symbol === a.symbol);
+    if (a.fromDate) list = list.filter((d) => d.date >= a.fromDate);
+    if (a.toDate) list = list.filter((d) => d.date <= a.toDate);
+    list.sort((x, y) => x.date.localeCompare(y.date));
+    if (!list.length) return "查無符合條件的配息紀錄";
+
+    if (a.aggregation === "summary") {
+      const total = list.reduce((s, d) => s + d.amount, 0);
+      return `共${list.length}筆配息，總金額NT$${nf(total)}`;
+    }
+    const limit = Math.min(200, Number(a.limit) || 120);
+    return list.slice(-limit).map((d) => `${d.date} ${d.symbol} ${nf(d.shares)}股 @NT$${d.perShare}/股 = NT$${nf(d.amount)}`).join("\n");
+  }
+
+  if (a.source === "holding_cost") {
+    const h = (holdings || []).find((x) => x.symbol === a.symbol);
+    const initialShares = h ? Number(h.initialShares || 0) : 0;
+    const symbolTrades = (trades || [])
+      .filter((t) => t.symbol === a.symbol && t.date <= a.asOfDate)
+      .slice()
+      .sort((x, y) => x.date.localeCompare(y.date));
+
+    let shares = initialShares;
+    let cost = 0; // 期初股數的成本沒有記錄，這裡當作0，結果只反映交易紀錄部分
+    for (const t of symbolTrades) {
+      if (t.action === "buy") {
+        cost += t.shares * t.price + Number(t.fee || 0);
+        shares += t.shares;
+      } else if (shares > 0) {
+        const avgPerShare = cost / shares;
+        const sellShares = Math.min(t.shares, shares);
+        cost -= avgPerShare * sellShares;
+        shares -= sellShares;
+      }
+    }
+    const avgCost = shares > 0 ? cost / shares : null;
+    const caveat = initialShares > 0
+      ? "（注意：期初股數的成本沒有記錄，這個均價只反映交易紀錄部分，可能不完全準確）"
+      : "";
+    if (shares <= 0) return `截至${a.asOfDate}：${a.symbol} 股數為0或查無資料${caveat}`;
+    return `截至${a.asOfDate}：${a.symbol} 股數${nf(shares)}股，均價NT$${avgCost.toFixed(2)}，總成本NT$${nf(Math.round(cost))}${caveat}`;
+  }
+
+  return `不支援的 source：${a.source}`;
 }
 
 function AiChatWidget({ holdings, goal, totalToday, totalInvested, trades, setTrades, setHoldings, setGoal, dailyRecords, dividends, planItems, planSchedule, goalDate, perf }) {
