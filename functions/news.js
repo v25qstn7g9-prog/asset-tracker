@@ -14,7 +14,7 @@
  * 格式理論上可能被 Google 調整，因此保留 ?debug=1 方便排查。
  */
 
-const NEWS_VERSION = "4.6-news-stable-2";
+const NEWS_VERSION = "4.6-news-stable-3";
 const SYMBOL_PATTERN = /^[0-9A-Za-z.]{1,10}$/;
 
 function isAllowedSymbol(s) {
@@ -68,28 +68,44 @@ function normalizeTitleKey(title) {
     .replace(/[，。！？、「」『』【】\-–—:：,.!?()（）\[\]]/g, "");
 }
 
+async function fetchRssOnce(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        // 用比較像真實瀏覽器的 UA，原本那個自訂字串（StockTracker/4.6-news）
+        // 容易被 Google 判定成機器人流量而回傳 503，換成常見瀏覽器 UA 降低被擋機率。
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "accept-language": "zh-TW,zh;q=0.9,en;q=0.8",
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug) {
   const query = name ? `${symbol} ${name}` : symbol;
   const url =
     `https://news.google.com/rss/search?q=${encodeURIComponent(query)}` +
     `&hl=zh-TW&gl=TW&ceid=TW:zh-Hant`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
-
   let xml;
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "accept": "application/rss+xml, application/xml, text/xml, */*",
-        "user-agent": "Mozilla/5.0 (compatible; StockTracker/4.6-news)",
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    xml = await res.text();
-  } finally {
-    clearTimeout(timer);
+    xml = await fetchRssOnce(url, 10000);
+  } catch (e) {
+    // 503/502/504 這類常見暫時性錯誤重試一次，給 Google 那邊多一次機會回應。
+    const msg = String(e?.message || "");
+    if (/HTTP (502|503|504)/.test(msg)) {
+      xml = await fetchRssOnce(url, 10000);
+    } else {
+      throw e;
+    }
   }
 
   const rawItems = xml.split("<item>").slice(1).map((s) => s.split("</item>")[0]);
