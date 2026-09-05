@@ -1,5 +1,5 @@
 /**
- * ask.js — 4.6-ask-free-7
+ * ask.js — 4.6-ask-free-8
  *
  * 聊天/問答功能：前端把使用者訊息 + 對話歷史 + 目前持股摘要（純文字）一起丟過來，
  * 這支 Function 組成訊息陣列，呼叫 Cloudflare Workers AI（免費），回傳文字答案，
@@ -23,7 +23,7 @@
  * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
  */
 
-const ASK_VERSION = "4.6-ask-free-7";
+const ASK_VERSION = "4.6-ask-free-8";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_TURNS = 16; // 多保留一些上下文，讓短句/代名詞也能接得上前文
 
@@ -52,6 +52,12 @@ const SYSTEM_PROMPT_BASE = `你是內嵌在一個個人存股資產追蹤 App �
 用提供的工具（function calling）去發起，不要只用文字回答說你會做——你自己沒辦法真的
 改動任何資料，一定要透過工具呼叫，讓 App 顯示確認卡片給使用者按確定才會真的生效。
 如果使用者給的資訊不夠（例如沒說股數或價格），先用文字問清楚，不要用工具呼叫瞎猜數字。
+
+另外有 get_trade_history、get_daily_records、get_dividend_history 這 3 個「查詢」工具，
+是唯讀的，不會跳確認卡片、不會有任何風險，可以直接呼叫。平常給你的摘要只有每檔最近20筆
+交易/每日紀錄/配息，遇到使用者問的問題需要更完整的歷史資料才能準確回答時
+（例如「幫我分析全部交易」「我這檔股票最早是什麼時候買的」這種摘要看不到的問題），
+直接主動呼叫對應的查詢工具去要更多資料，不用叫使用者自己貼資料給你。
 
 這是手機上的小聊天視窗，回答簡潔清楚、口氣自然就好，不用太拘謹，但也不要為了顯得
 活潑而扯不相關的話或加一堆語助詞。如果使用者用很短的句子、代名詞、省略句，
@@ -151,7 +157,54 @@ const TOOLS = [
       },
     },
   },
+  // 以下 3 個是「唯讀查詢」工具，不會跳確認卡片，會自動執行並把結果拿回來讓你回答 ——
+  // 平常給的摘要只有每檔最近 20 筆交易/每日紀錄/配息，遇到需要更完整歷史資料的問題
+  // （例如「幫我分析全部交易紀錄」）就主動呼叫這些工具去要更多，不用使用者自己貼資料。
+  {
+    type: "function",
+    function: {
+      name: "get_trade_history",
+      description: "取得某檔股票更完整的交易紀錄（平常摘要只給最近20筆，需要分析全部歷史或找特定舊交易時使用）",
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: { type: "string", description: "股票代號" },
+          limit: { type: "number", description: "最多回傳幾筆，預設100，最多200" },
+        },
+        required: ["symbol"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_daily_records",
+      description: "取得更長時間範圍的每日資產紀錄（平常摘要只給最近20筆）",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "取最近幾天的紀錄，預設90，最多365" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_dividend_history",
+      description: "取得更完整的配息紀錄（平常摘要只給最近20筆），可指定股票代號篩選",
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: { type: "string", description: "股票代號，不指定就回傳全部股票的配息" },
+          limit: { type: "number", description: "最多回傳幾筆，預設100，最多200" },
+        },
+      },
+    },
+  },
 ];
+
+const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history"];
 
 export async function onRequestPost(context) {
   try {
