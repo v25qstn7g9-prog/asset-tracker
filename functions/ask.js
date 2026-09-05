@@ -1,5 +1,5 @@
 /**
- * ask.js — 4.6-ask-free-6
+ * ask.js — 4.6-ask-free-7
  *
  * 聊天/問答功能：前端把使用者訊息 + 對話歷史 + 目前持股摘要（純文字）一起丟過來，
  * 這支 Function 組成訊息陣列，呼叫 Cloudflare Workers AI（免費），回傳文字答案，
@@ -23,7 +23,7 @@
  * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
  */
 
-const ASK_VERSION = "4.6-ask-free-6";
+const ASK_VERSION = "4.6-ask-free-7";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_TURNS = 16; // 多保留一些上下文，讓短句/代名詞也能接得上前文
 
@@ -203,7 +203,14 @@ export async function onRequestPost(context) {
     });
 
     // 優先處理「AI 想呼叫工具」的情況：不執行，只是把提議整理好回傳給前端顯示確認卡片。
-    const rawToolCalls = result?.tool_calls || result?.response?.tool_calls || null;
+    // 不同模型回傳工具呼叫的位置不太一樣：GLM 放在最外層 result.tool_calls，
+    // Gemma（OpenAI Chat Completions 相容格式）放在 result.choices[0].message.tool_calls，
+    // 三個位置都檢查，換模型才不會因為格式對不上而讀不到。
+    const rawToolCalls =
+      result?.tool_calls ||
+      result?.response?.tool_calls ||
+      result?.choices?.[0]?.message?.tool_calls ||
+      null;
     if (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
       const toolCalls = rawToolCalls
         .map((tc) => {
