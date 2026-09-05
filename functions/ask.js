@@ -1,31 +1,23 @@
 /**
- * ask.js — 4.6-ask-free-8
+ * ask.js — 4.6-ask-free-15
  *
- * 聊天/問答功能：前端把使用者訊息 + 對話歷史 + 目前持股摘要（純文字）一起丟過來，
- * 這支 Function 組成訊息陣列，呼叫 Cloudflare Workers AI（免費），回傳文字答案，
- * 或是在使用者要求「幫我做某件事」時，回傳一個「提議的動作」（tool call）讓前端
- * 顯示確認卡片 —— AI 只負責提議，實際寫入資料由前端在使用者按「確定」後執行，
- * AI 本身沒有能力直接改動任何資料。
+ * POST /ask
+ * body: {
+ *   message: string,
+ *   history?: [{ role: "user"|"assistant", content: string }, ...],
+ *   context?: string   // 持股摘要純文字；閒聊可不帶以省 neurons
+ * }
+ * 回傳: { ok: true, reply } 或 { ok: true, toolCalls: [{ name, arguments }] }
  *
- * 用法：POST /ask
- *   body: {
- *     message: "我 0056 現在賺多少？",
- *     history: [{role:"user"|"assistant", content:"..."}, ...],  // 最近幾輪對話，可省略
- *     context: "0050 目前4645股 平均成本80.39 ..."                // 持股摘要純文字，可省略（純閒聊時可不帶）
- *   }
- *   回傳（一般回答）: { ok: true, reply: "..." }
- *   回傳（AI 想執行動作）: { ok: true, toolCalls: [{ name, arguments }] }
- *
- * 需要在 Cloudflare Pages 專案設定 AI 綁定（不用申請外部 API 金鑰，完全免費）：
- *   專案 → Settings → Functions → AI bindings → Add binding
- *   Variable name: AI
- *
- * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
+ * Cloudflare Pages → Settings → Functions → AI bindings → Variable name: AI
  */
-
-const ASK_VERSION = "4.6-ask-free-13";
+const ASK_VERSION = "4.6-ask-free-15";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
-const MAX_HISTORY_TURNS = 8; // 縮短保留輪數以省用量；太久以前的對話對回答通常沒幫助
+const MAX_HISTORY_TURNS = 6; // 再縮一點省輸入 token
+const MAX_MESSAGE_LEN = 2000;
+const MAX_HISTORY_CONTENT = 3000;
+const MAX_CONTEXT_LEN = 4000;
+const MAX_TOKENS = 500;
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -37,62 +29,35 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-const SYSTEM_PROMPT_BASE = `你是內嵌在一個個人存股資產追蹤 App 裡的助手，用繁體中文回答。
-使用者可能單純閒聊，也可能問跟他自己持股相關的問題（例如「我現在賺多少」「什麼時候會達標」），
-也可能要求你「幫他做某件事」（例如「幫我記一筆交易」「把目標改成多少股」）。
+const SYSTEM_PROMPT_BASE = `你是內嵌在個人存股資產追蹤 App 的助手，用繁體中文回答。
 
-【最重要的規則：不要編造數字或細節】只能用「目前持股資料」裡實際出現的數字回答，
-沒有出現在資料裡的東西（年齡、比例、日期、任何數字）絕對不要自己編，
-如果資料不夠回答，就直接說「這個我這邊看不到資料」，不要硬湊一個答案出來。
+【最重要】不要編造數字。只能使用「目前持股資料」或 query_app_data 回傳的數字。
+資料不足就說「這個我這邊看不到資料」，不要硬湊。
 
-如果訊息裡有附上「目前持股資料」，那是使用者當下 App 裡的真實數字，直接拿來回答、
-不用再叫他自己去查；如果問題跟持股資料無關，就正常聊。
+使用者可能閒聊、問持股（賺多少、達標進度），或要求執行動作（記交易、改目標股數、改均價、改總目標）。
+執行動作必須用工具（function calling），你無法直接改資料；App 會顯示確認卡，使用者按確定才生效。
+資訊不夠（缺股數、價格等）先用文字問清楚，不要瞎猜後呼叫工具。
 
-如果使用者要求你做動作（新增交易、修改目標股數、修改平均成本、修改總目標金額），
-用提供的工具（function calling）去發起，不要只用文字回答說你會做——你自己沒辦法真的
-改動任何資料，一定要透過工具呼叫，讓 App 顯示確認卡片給使用者按確定才會真的生效。
-如果使用者給的資訊不夠（例如沒說股數或價格），先用文字問清楚，不要用工具呼叫瞎猜數字。
+query_app_data 是唯讀查詢，可直接呼叫，不用確認卡。
+【重要】彙總結果都已由程式算好，不要自己對 records 明細手動加減比較。
+- 現在持股成本：看摘要即可
+- 過去某日成本：source=holding_cost + symbol + asOfDate
+- A→B 變化量：source=daily_records, aggregation=start_end, fromDate/toDate（跟區間長短無關，
+  橫跨數月也一樣一次查完，不要覺得範圍大就遲疑或改用別的方式）
+- 某日絕對本金/市值：aggregation=summary，填 toDate（或同一天）
+- 哪個月漲跌最多：aggregation=min_max
+- 月度趨勢：aggregation=monthly；明細才用 records
+- 交易/配息：source=trades 或 dividends；統計用 summary，列表用 records
+同一問題最多查 2 次；不確定「變化量還是絕對值」就直接問使用者。
 
-另外有 query_app_data 這個通用唯讀查詢工具，可以查每日資產/本金、交易、配息，
-以及某檔股票在過去日期的持有成本。這是唯讀的，不會跳確認卡片、不會有任何風險，
-可以直接呼叫，不用等使用者教你怎麼查、也不要叫他自己翻頁或貼資料給你。
-
-【重要：查詢結果都已經算好，你不用也不可以自己動手算】
-query_app_data 回傳的每一種彙總方式（start_end 頭尾差額、monthly 每月變化、
-min_max 找漲最多跌最多的月份）都是用程式碼精算好的結果，你只需要決定要查什麼、
-再把拿到的數字組織成自然的回答，絕對不要把 aggregation=records 查到的一堆原始
-明細自己拿去手動加減比較大小——那樣很容易看錯或抄錯數字，算出跟事實不符的答案。
-有現成的彙總方式可以拿到答案，就一定要用那個，不要自己算。
-
-用法舉例：
-- 「現在」的持股成本不用查，摘要裡已經有了；「過去某個日期」的成本才用
-  source=holding_cost 帶 symbol+asOfDate。
-- 「從A到B資產/本金/損益變化/增加多少」用 source=daily_records、aggregation=start_end
-  帶 fromDate/toDate，直接拿到算好的差額，不要自己相減。
-- 「A這天/當下總共投入本金是多少」（問絕對金額，不是問變化量）用 source=daily_records、
-  aggregation=summary，只填 toDate（或 fromDate=toDate 都填同一天），看回傳裡那一天的
-  totalCost 絕對值，不要跟 start_end 搞混。
-- 「今年哪個月資產掉最多」這類問題用 source=daily_records、aggregation=min_max。
-- 想看月度趨勢用 aggregation=monthly；要看原始紀錄、瀏覽明細才用 records。
-- 查交易用 source=trades；查配息用 source=dividends；兩者統計數字用
-  aggregation=summary（一樣是算好的），列表才用 records。
-- 你可以連續查詢多次，但同一個問題最多查 2 次；如果查了 2 次還是不確定使用者要
-  「變化量」還是「絕對金額」，直接用文字問使用者是哪一種，不要一直換方式重查。
-
-這是手機上的小聊天視窗，回答簡潔清楚、口氣自然就好，不用太拘謹，但也不要為了顯得
-活潑而扯不相關的話或加一堆語助詞。如果使用者用很短的句子、代名詞、省略句，
-結合最近對話理解他在說什麼，不用每句話都當成全新問題重新解釋一次背景。
-你不是財務顧問，不要給「應該買/應該賣」這種明確投資建議，可以中性分析、給資訊，
-但決策留給使用者自己判斷。`;
+手機小視窗：回答簡潔。可結合最近對話理解省略句。
+你不是財務顧問，不要給應買應賣建議，可中性說明資訊。`;
 
 const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
 
-// 這個模型跟你的訓練資料一樣，本身不知道「現在」是幾點幾號；
-// 直接用伺服器的真實時間算出台灣現在的日期時間，塞進 system prompt，
-// 這樣才不會依賴使用者手機的時間設定（也比較準）。
 function taiwanNowLabel() {
   const now = new Date();
-  const t = new Date(now.getTime() + 8 * 60 * 60 * 1000); // UTC+8
+  const t = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   const y = t.getUTCFullYear();
   const m = String(t.getUTCMonth() + 1).padStart(2, "0");
   const d = String(t.getUTCDate()).padStart(2, "0");
@@ -108,8 +73,6 @@ function taiwanTodayStr() {
   return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
 }
 
-// 只開放這 4 個動作；「刪除交易」故意不開放 —— 用自然語言去配對「要刪哪一筆」風險太高，
-// 容易刪錯，這類危險動作留給使用者自己在 App 裡手動刪。
 const TOOLS = [
   {
     type: "function",
@@ -123,10 +86,10 @@ const TOOLS = [
           action: { type: "string", enum: ["buy", "sell"], description: "buy=買進，sell=賣出" },
           shares: { type: "number", description: "股數" },
           price: { type: "number", description: "每股成交價" },
-          fee: { type: "number", description: "手續費，使用者沒說就填 0" },
-          tax: { type: "number", description: "證交稅（只有賣出才有），使用者沒說就填 0" },
-          date: { type: "string", description: `交易日期 YYYY-MM-DD，使用者沒說就用今天 ${taiwanTodayStr()}` },
-          note: { type: "string", description: "備註，沒有就留空字串" },
+          fee: { type: "number", description: "手續費，沒說填 0" },
+          tax: { type: "number", description: "證交稅（賣出），沒說填 0" },
+          date: { type: "string", description: `交易日期 YYYY-MM-DD，沒說用今天 ${taiwanTodayStr()}` },
+          note: { type: "string", description: "備註，沒有就空字串" },
         },
         required: ["symbol", "action", "shares", "price"],
       },
@@ -151,13 +114,13 @@ const TOOLS = [
     type: "function",
     function: {
       name: "update_manual_avg_cost",
-      description: "手動設定某檔股票的平均成本（覆蓋掉自動計算的均價），或清除手動設定改回自動計算",
+      description: "手動設定平均成本，或清除改回自動計算",
       parameters: {
         type: "object",
         properties: {
           symbol: { type: "string", description: "股票代號" },
-          avgCost: { type: "number", description: "新的平均成本；若使用者要求清除手動設定、改回自動計算，這裡填 0" },
-          clear: { type: "boolean", description: "true 表示清除手動設定、改回自動計算，此時忽略 avgCost" },
+          avgCost: { type: "number", description: "新均價；清除時可填 0" },
+          clear: { type: "boolean", description: "true=清除手動設定，改回自動計算" },
         },
         required: ["symbol"],
       },
@@ -167,42 +130,37 @@ const TOOLS = [
     type: "function",
     function: {
       name: "update_goal",
-      description: "修改整體投資的總目標金額或目標年份",
+      description: "修改總目標金額或目標年份",
       parameters: {
         type: "object",
         properties: {
-          targetAmount: { type: "number", description: "新的目標金額（新台幣），沒有要改就不要帶這個欄位" },
-          targetYear: { type: "number", description: "新的目標年份，沒有要改就不要帶這個欄位" },
+          targetAmount: { type: "number", description: "新目標金額（TWD），不改就不要帶" },
+          targetYear: { type: "number", description: "新目標年份，不改就不要帶" },
         },
       },
     },
   },
-  // 唯讀查詢：AI 自己決定要查哪個來源、什麼區間、用哪種彙總方式，不用每多一種問法
-  // 就替它加一個專用工具。重要：所有彙總（monthly/min_max/start_end/summary）都是
-  // 前端用程式碼算好才回傳給你，你只要決定要查什麼、以及怎麼把結果講出來，
-  // 絕對不要自己把 records 原始明細拿去手動加減比較——那樣容易抄錯數字算錯，
-  // 有現成的彙總方式可以拿到已經算好的答案，就不要自己動手算。
   {
     type: "function",
     function: {
       name: "query_app_data",
-      description: "通用唯讀資料查詢。可查每日資產/本金、交易、配息、過去日期持有成本；需要歷史數字、區間比較、月度趨勢、高低點或完整明細時主動使用，不用等使用者教你怎麼查。",
+      description: "唯讀查詢：每日資產/本金、交易、配息、過去持有成本。需要歷史數字時主動使用。",
       parameters: {
         type: "object",
         properties: {
           source: {
             type: "string",
             enum: ["daily_records", "trades", "dividends", "holding_cost"],
-            description: "要查的資料來源",
+            description: "資料來源",
           },
-          fromDate: { type: "string", description: "起始日期 YYYY-MM-DD；區間查詢可用，不填代表從最早開始" },
-          toDate: { type: "string", description: "結束日期 YYYY-MM-DD；不填可視為到今天" },
-          asOfDate: { type: "string", description: "holding_cost 專用：計算到這一天為止（含當天）" },
-          symbol: { type: "string", description: "股票代號；trades/dividends/holding_cost 可用，holding_cost 必填" },
+          fromDate: { type: "string", description: "起始 YYYY-MM-DD" },
+          toDate: { type: "string", description: "結束 YYYY-MM-DD" },
+          asOfDate: { type: "string", description: "holding_cost：計算到此日（含）" },
+          symbol: { type: "string", description: "股票代號；holding_cost 必填" },
           aggregation: {
             type: "string",
             enum: ["records", "start_end", "monthly", "min_max", "summary"],
-            description: "daily_records 可用 records(原始明細)/start_end(頭尾兩天差額，已算好)/monthly(每月變化，已算好)/min_max(區間內漲最多跌最多的月份，已算好)；trades/dividends 建議 records 或 summary(已算好的統計)；holding_cost 不用填",
+            description: "daily_records: records/start_end/monthly/min_max；trades/dividends: records 或 summary",
           },
           fields: {
             type: "array",
@@ -210,17 +168,15 @@ const TOOLS = [
               type: "string",
               enum: ["totalAsset", "totalCost", "totalGain", "twValue", "usValue", "twCost", "usCost", "twGain", "usGain"],
             },
-            description: "daily_records 想特別關注的欄位（例如只看 twValue）；min_max 用第一個欄位當比較依據，不填預設用 totalGain（市場報酬）",
+            description: "關注欄位；min_max 用第一個當比較鍵，預設 totalGain",
           },
-          limit: { type: "number", description: "records 最多回傳幾筆，預設120，最多200" },
+          limit: { type: "number", description: "records 最多筆數，預設 120，上限 200" },
         },
         required: ["source"],
       },
     },
   },
 ];
-
-const READ_TOOL_NAMES = ["query_app_data"];
 
 export async function onRequestPost(context) {
   try {
@@ -229,7 +185,8 @@ export async function onRequestPost(context) {
       return jsonResponse(
         {
           error:
-            "尚未設定 AI 綁定，請到 Cloudflare Pages 專案 Settings → Functions → AI bindings 加上一個 Variable name 為 AI 的綁定。",
+            "尚未設定 AI 綁定，請到 Cloudflare Pages 專案 Settings → Functions → AI bindings 加上 Variable name 為 AI 的綁定。",
+          version: ASK_VERSION,
         },
         500
       );
@@ -237,23 +194,23 @@ export async function onRequestPost(context) {
 
     const body = await context.request.json().catch(() => null);
     const message = String(body?.message || "").trim();
-    if (!message) {
-      return jsonResponse({ error: "沒有收到訊息內容" }, 400);
-    }
-    if (message.length > 2000) {
-      return jsonResponse({ error: "訊息太長了，麻煩縮短一點" }, 400);
+    if (!message) return jsonResponse({ error: "沒有收到訊息內容", version: ASK_VERSION }, 400);
+    if (message.length > MAX_MESSAGE_LEN) {
+      return jsonResponse({ error: "訊息太長了，麻煩縮短一點", version: ASK_VERSION }, 400);
     }
 
     const rawHistory = Array.isArray(body?.history) ? body.history : [];
     const history = rawHistory
       .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
       .slice(-MAX_HISTORY_TURNS * 2)
-      .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+      .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_HISTORY_CONTENT) }));
 
-    const contextText = typeof body?.context === "string" ? body.context.slice(0, 10000) : "";
-    const dateLine = `現在的日期時間是：${taiwanNowLabel()}。使用者問「今天」「現在」「幾天後」這類問題時，以這個時間為準去計算。`;
+    const contextText =
+      typeof body?.context === "string" ? body.context.slice(0, MAX_CONTEXT_LEN) : "";
+
+    const dateLine = `現在的日期時間是：${taiwanNowLabel()}。問「今天」「現在」「幾天後」以此為準。`;
     const systemPrompt = contextText
-      ? `${SYSTEM_PROMPT_BASE}\n\n${dateLine}\n\n目前持股資料（使用者 App 裡的即時數字）：\n${contextText}`
+      ? `${SYSTEM_PROMPT_BASE}\n\n${dateLine}\n\n目前持股資料：\n${contextText}`
       : `${SYSTEM_PROMPT_BASE}\n\n${dateLine}`;
 
     const messages = [
@@ -264,29 +221,28 @@ export async function onRequestPost(context) {
 
     const result = await ai.run(MODEL, {
       messages,
-      max_tokens: 700,
+      max_tokens: MAX_TOKENS,
       tools: TOOLS,
-      // GLM-4.7-flash 預設會先跑一段隱藏的「思考過程」再回答，容易把 token 額度耗在思考上、
-      // 導致又慢又拿不到最終答案；關掉 thinking 讓它直接回答，聊天場景不需要深度推理。
       chat_template_kwargs: { enable_thinking: false },
     });
 
-    // 優先處理「AI 想呼叫工具」的情況：不執行，只是把提議整理好回傳給前端顯示確認卡片。
-    // 不同模型回傳工具呼叫的位置不太一樣：GLM 放在最外層 result.tool_calls，
-    // Gemma（OpenAI Chat Completions 相容格式）放在 result.choices[0].message.tool_calls，
-    // 三個位置都檢查，換模型才不會因為格式對不上而讀不到。
     const rawToolCalls =
       result?.tool_calls ||
       result?.response?.tool_calls ||
       result?.choices?.[0]?.message?.tool_calls ||
       null;
+
     if (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
       const toolCalls = rawToolCalls
         .map((tc) => {
           const name = tc?.name || tc?.function?.name;
           let args = tc?.arguments ?? tc?.function?.arguments;
           if (typeof args === "string") {
-            try { args = JSON.parse(args); } catch { args = {}; }
+            try {
+              args = JSON.parse(args);
+            } catch {
+              args = {};
+            }
           }
           return name ? { name, arguments: args || {} } : null;
         })
@@ -299,11 +255,10 @@ export async function onRequestPost(context) {
 
     let reply = String(result?.response || "").trim();
     if (!reply && Array.isArray(result?.choices)) {
-      // 保險：如果之後模型改成回傳 OpenAI 相容格式，這裡也接得住
       reply = String(result.choices[0]?.message?.content || "").trim();
     }
     if (!reply) {
-      return jsonResponse({ error: "AI 沒有回傳文字內容" }, 502);
+      return jsonResponse({ error: "AI 沒有回傳文字內容", version: ASK_VERSION }, 502);
     }
 
     return jsonResponse({ ok: true, version: ASK_VERSION, reply });
