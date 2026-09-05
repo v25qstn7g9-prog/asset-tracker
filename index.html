@@ -747,6 +747,12 @@ function AssetTracker() {
       .filter((t) => t.date >= quarterStartStr)
       .reduce((s, t) => s + (t.action === "buy" ? t.shares : -t.shares), 0);
 
+    // 今年累計（自然年：1/1 起算）淨增加股數，跨年就歸零重算。
+    const yearStartStr = `${now.getFullYear()}-01-01`;
+    const yearSharesAdded = symbolTrades
+      .filter((t) => t.date >= yearStartStr)
+      .reduce((s, t) => s + (t.action === "buy" ? t.shares : -t.shares), 0);
+
     // 推估離目標股數還要多久：用「從第一筆交易到今天」的實際淨增加股數，
     // 算出平均每月增加速度，再用剩餘股數 ÷ 這個速度，推算預估達成日期（精確到日）。
     // 完全依實際交易紀錄，不是用假設報酬率或投入金額去猜。
@@ -777,7 +783,7 @@ function AssetTracker() {
 
     return {
       ...h, bought, sold, current, pct, avgCost, estCostBasis, isManualAvgCost: hasManualAvgCost, avgTradePrice,
-      quarterSharesAdded, quarterNum, projectedLabel,
+      quarterSharesAdded, quarterNum, yearSharesAdded, projectedLabel,
     };
   }), [holdings, trades]);
 
@@ -1771,9 +1777,16 @@ function HoldingsPanel({ holdings, setHoldings }) {
                     <span style={{ color: COLORS.sub }}>目前 {nf(h.current)} 股</span>
                     <span style={{ color: COLORS.sub }}>目標 {nf(h.target2035)} 股</span>
                   </div>
-                  <div className="text-[11px] mono mt-1" style={{ color: COLORS.sub }}>
-                    第 {h.quarterNum} 季增加 <span style={{ color: h.quarterSharesAdded >= 0 ? COLORS.text : COLORS.gain }}>
-                      {h.quarterSharesAdded > 0 ? "+" : ""}{nf(h.quarterSharesAdded)} 股
+                  <div className="flex justify-between text-[11px] mono mt-1" style={{ color: COLORS.sub }}>
+                    <span>
+                      第 {h.quarterNum} 季增加 <span style={{ color: h.quarterSharesAdded >= 0 ? COLORS.text : COLORS.gain }}>
+                        {h.quarterSharesAdded > 0 ? "+" : ""}{nf(h.quarterSharesAdded)} 股
+                      </span>
+                    </span>
+                    <span>
+                      今年累計 <span style={{ color: h.yearSharesAdded >= 0 ? COLORS.text : COLORS.gain }}>
+                        {h.yearSharesAdded > 0 ? "+" : ""}{nf(h.yearSharesAdded)} 股
+                      </span>
                     </span>
                   </div>
                   <div className="mt-1 h-1.5 rounded-full overflow-hidden" style={{ background: COLORS.panelBorder }}>
