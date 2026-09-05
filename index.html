@@ -2472,52 +2472,57 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested }) {
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: COLORS.bg }}>
-          <div className="flex items-center justify-between px-4 py-3"
-            style={{ borderBottom: `1px solid ${COLORS.panelBorder}` }}>
-            <div className="font-bold text-sm">AI 助手</div>
-            <button onClick={() => setOpen(false)} style={{ color: COLORS.sub }}><X size={20} /></button>
-          </div>
+        <div className="fixed inset-0 z-50 flex flex-col justify-end" style={{ background: "rgba(0,0,0,0.5)" }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}>
+          <div className="flex flex-col rounded-t-2xl" style={{
+            background: COLORS.bg, height: "65vh", boxShadow: "0 -8px 24px rgba(0,0,0,0.4)",
+          }}>
+            <div className="flex items-center justify-between px-4 py-3"
+              style={{ borderBottom: `1px solid ${COLORS.panelBorder}` }}>
+              <div className="font-bold text-sm">AI 助手</div>
+              <button onClick={() => setOpen(false)} style={{ color: COLORS.sub }}><X size={20} /></button>
+            </div>
 
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-            {messages.length === 0 && (
-              <div className="text-xs text-center mt-6" style={{ color: COLORS.sub }}>
-                可以問我閒聊，或是問你自己的持股狀況，例如「0056 現在賺多少？」
-              </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className="max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed"
-                  style={{
-                    background: m.role === "user" ? COLORS.gold : COLORS.panel,
-                    color: m.role === "user" ? COLORS.bg : COLORS.text,
-                    border: m.role === "user" ? "none" : `1px solid ${COLORS.panelBorder}`,
-                  }}>
-                  {m.content}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              {messages.length === 0 && (
+                <div className="text-xs text-center mt-6" style={{ color: COLORS.sub }}>
+                  可以問我閒聊，或是問你自己的持股狀況，例如「0056 現在賺多少？」
                 </div>
-              </div>
-            ))}
-            {sending && (
-              <div className="flex justify-start">
-                <div className="rounded-2xl px-3 py-2 text-sm" style={{ background: COLORS.panel, color: COLORS.sub, border: `1px solid ${COLORS.panelBorder}` }}>
-                  思考中…
+              )}
+              {messages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div className="max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed"
+                    style={{
+                      background: m.role === "user" ? COLORS.gold : COLORS.panel,
+                      color: m.role === "user" ? COLORS.bg : COLORS.text,
+                      border: m.role === "user" ? "none" : `1px solid ${COLORS.panelBorder}`,
+                    }}>
+                    {m.content}
+                  </div>
                 </div>
-              </div>
-            )}
-            {error && <div className="text-xs text-center" style={{ color: COLORS.gain }}>{error}</div>}
-          </div>
+              ))}
+              {sending && (
+                <div className="flex justify-start">
+                  <div className="rounded-2xl px-3 py-2 text-sm" style={{ background: COLORS.panel, color: COLORS.sub, border: `1px solid ${COLORS.panelBorder}` }}>
+                    思考中…
+                  </div>
+                </div>
+              )}
+              {error && <div className="text-xs text-center" style={{ color: COLORS.gain }}>{error}</div>}
+            </div>
 
-          <div className="px-3 py-3 flex items-end gap-2"
-            style={{ borderTop: `1px solid ${COLORS.panelBorder}`, paddingBottom: "calc(12px + env(safe-area-inset-bottom, 4px))" }}>
-            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
-              placeholder="輸入訊息…" rows={1}
-              className="flex-1 rounded-xl px-3 py-2 text-sm resize-none"
-              style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`, color: COLORS.text, outline: "none" }} />
-            <button onClick={send} disabled={sending || !input.trim()}
-              className="rounded-xl px-3 py-2.5 flex items-center justify-center"
-              style={{ background: COLORS.gold, color: COLORS.bg, opacity: (sending || !input.trim()) ? 0.5 : 1 }}>
-              <Send size={18} />
-            </button>
+            <div className="px-3 py-3 flex items-end gap-2"
+              style={{ borderTop: `1px solid ${COLORS.panelBorder}`, paddingBottom: "calc(12px + env(safe-area-inset-bottom, 4px))" }}>
+              <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
+                placeholder="輸入訊息…" rows={1}
+                className="flex-1 rounded-xl px-3 py-2 text-sm resize-none"
+                style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`, color: COLORS.text, outline: "none" }} />
+              <button onClick={send} disabled={sending || !input.trim()}
+                className="rounded-xl px-3 py-2.5 flex items-center justify-center"
+                style={{ background: COLORS.gold, color: COLORS.bg, opacity: (sending || !input.trim()) ? 0.5 : 1 }}>
+                <Send size={18} />
+              </button>
+            </div>
           </div>
         </div>
       )}
