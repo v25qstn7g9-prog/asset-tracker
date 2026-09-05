@@ -14,7 +14,7 @@
  * 格式理論上可能被 Google 調整，因此保留 ?debug=1 方便排查。
  */
 
-const NEWS_VERSION = "4.6-news-stable-1";
+const NEWS_VERSION = "4.6-news-stable-2";
 const SYMBOL_PATTERN = /^[0-9A-Za-z.]{1,10}$/;
 
 function isAllowedSymbol(s) {
@@ -75,7 +75,7 @@ async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug
     `&hl=zh-TW&gl=TW&ceid=TW:zh-Hant`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
+  const timer = setTimeout(() => controller.abort(), 12000);
 
   let xml;
   try {
