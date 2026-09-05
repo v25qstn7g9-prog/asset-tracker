@@ -1,5 +1,5 @@
 /**
- * ask.js — 4.6-ask-free-15
+ * ask.js — 4.6-ask-free-16 (Optimized Version)
  *
  * POST /ask
  * body: {
@@ -9,11 +9,13 @@
  * }
  * 回傳: { ok: true, reply } 或 { ok: true, toolCalls: [{ name, arguments }] }
  *
- * Cloudflare Pages → Settings → Functions → AI bindings → Variable name: AI
+ * Cloudflare Pages → Settings → Functions → 
+ * 1. AI bindings → Variable name: AI
+ * 2. Environment variables → Variable name: ASK_SECRET, Value: (你的自訂密碼，例如: my-super-secret) [可選，設定後需在前端帶 Header]
  */
-const ASK_VERSION = "4.6-ask-free-15";
+const ASK_VERSION = "4.6-ask-free-16";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
-const MAX_HISTORY_TURNS = 6; // 再縮一點省輸入 token
+const MAX_HISTORY_TURNS = 6;
 const MAX_MESSAGE_LEN = 2000;
 const MAX_HISTORY_CONTENT = 3000;
 const MAX_CONTEXT_LEN = 4000;
@@ -53,24 +55,20 @@ query_app_data 是唯讀查詢，可直接呼叫，不用確認卡。
 手機小視窗：回答簡潔。可結合最近對話理解省略句。
 你不是財務顧問，不要給應買應賣建議，可中性說明資訊。`;
 
-const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
-
 function taiwanNowLabel() {
-  const now = new Date();
-  const t = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  const y = t.getUTCFullYear();
-  const m = String(t.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(t.getUTCDate()).padStart(2, "0");
-  const hh = String(t.getUTCHours()).padStart(2, "0");
-  const mm = String(t.getUTCMinutes()).padStart(2, "0");
-  const weekday = WEEKDAY_ZH[t.getUTCDay()];
-  return `${y}-${m}-${d}（星期${weekday}）${hh}:${mm}（台灣時間 UTC+8）`;
+  const options = {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', weekday: 'short',
+    hour12: false
+  };
+  const formatted = new Intl.DateTimeFormat('zh-TW', options).format(new Date());
+  return `${formatted}（台灣時間 UTC+8）`;
 }
 
 function taiwanTodayStr() {
-  const now = new Date();
-  const t = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
+  const options = { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' };
+  return new Intl.DateTimeFormat('zh-TW', options).format(new Date()).replace(/\//g, '-');
 }
 
 const TOOLS = [
@@ -180,6 +178,14 @@ const TOOLS = [
 
 export async function onRequestPost(context) {
   try {
+    const secret = context.env.ASK_SECRET;
+    if (secret) {
+      const auth = context.request.headers.get("Authorization");
+      if (auth !== `Bearer ${secret}`) {
+        return jsonResponse({ error: "未授權的請求 (Unauthorized)", version: ASK_VERSION }, 401);
+      }
+    }
+
     const ai = context.env.AI;
     if (!ai) {
       return jsonResponse(
@@ -237,13 +243,16 @@ export async function onRequestPost(context) {
         .map((tc) => {
           const name = tc?.name || tc?.function?.name;
           let args = tc?.arguments ?? tc?.function?.arguments;
+          
           if (typeof args === "string") {
             try {
-              args = JSON.parse(args);
+              const cleanArgs = args.replace(/```json\n?/gi, "").replace(/```/g, "").trim();
+              args = JSON.parse(cleanArgs);
             } catch {
               args = {};
             }
           }
+          
           return name ? { name, arguments: args || {} } : null;
         })
         .filter(Boolean);
