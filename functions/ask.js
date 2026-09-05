@@ -23,7 +23,7 @@
  * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
  */
 
-const ASK_VERSION = "4.6-ask-free-8";
+const ASK_VERSION = "4.6-ask-free-9";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_TURNS = 16; // 多保留一些上下文，讓短句/代名詞也能接得上前文
 
@@ -53,11 +53,16 @@ const SYSTEM_PROMPT_BASE = `你是內嵌在一個個人存股資產追蹤 App �
 改動任何資料，一定要透過工具呼叫，讓 App 顯示確認卡片給使用者按確定才會真的生效。
 如果使用者給的資訊不夠（例如沒說股數或價格），先用文字問清楚，不要用工具呼叫瞎猜數字。
 
-另外有 get_trade_history、get_daily_records、get_dividend_history 這 3 個「查詢」工具，
-是唯讀的，不會跳確認卡片、不會有任何風險，可以直接呼叫。平常給你的摘要只有每檔最近20筆
-交易/每日紀錄/配息，遇到使用者問的問題需要更完整的歷史資料才能準確回答時
-（例如「幫我分析全部交易」「我這檔股票最早是什麼時候買的」這種摘要看不到的問題），
+另外有 get_trade_history、get_daily_records、get_dividend_history、get_holding_cost_asof
+這 4 個「查詢」工具，是唯讀的，不會跳確認卡片、不會有任何風險，可以直接呼叫。平常給你的
+摘要只有每檔最近20筆交易/每日紀錄/配息、以及「現在」的持股成本，遇到使用者問的問題需要
+更完整的歷史資料或「過去某個時間點」的數字才能準確回答時（例如「幫我分析全部交易」
+「07/30到現在我的本金增加多少」「我今年初xx股票的成本是多少」這種摘要看不到的問題），
 直接主動呼叫對應的查詢工具去要更多資料，不用叫使用者自己貼資料給你。
+問「現在」的持股成本不用呼叫 get_holding_cost_asof，摘要裡已經有了；
+問「過去某個日期」的持股成本才需要呼叫這個工具、並帶上那個日期。
+問「某段期間本金/資產變化」用 get_daily_records 帶 fromDate/toDate 查該區間頭尾兩天的紀錄，
+用兩天的差去算，不要用假設值瞎猜。
 
 這是手機上的小聊天視窗，回答簡潔清楚、口氣自然就好，不用太拘謹，但也不要為了顯得
 活潑而扯不相關的話或加一堆語助詞。如果使用者用很短的句子、代名詞、省略句，
@@ -179,11 +184,13 @@ const TOOLS = [
     type: "function",
     function: {
       name: "get_daily_records",
-      description: "取得更長時間範圍的每日資產紀錄（平常摘要只給最近20筆）",
+      description: "取得更長時間範圍的每日資產紀錄，包含投入成本（平常摘要只給最近20筆）。可指定日期區間查詢，適合回答「某段期間本金增加多少」這類問題。",
       parameters: {
         type: "object",
         properties: {
-          days: { type: "number", description: "取最近幾天的紀錄，預設90，最多365" },
+          days: { type: "number", description: "取最近幾天的紀錄，預設90，最多365；如果有指定 fromDate/toDate 就不用填這個" },
+          fromDate: { type: "string", description: "起始日期 YYYY-MM-DD，要查特定區間時使用" },
+          toDate: { type: "string", description: "結束日期 YYYY-MM-DD，要查特定區間時使用，沒填就預設到今天" },
         },
       },
     },
@@ -202,9 +209,24 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "get_holding_cost_asof",
+      description: "計算某檔股票在「特定過去日期當下」的股數、平均成本、總成本（用該日期之前的交易紀錄現算），適合回答「某年某月我的xx成本是多少」這種歷史時間點的問題，而不是問現在的成本（現在的成本已經在持股摘要裡了，不用呼叫這個）",
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: { type: "string", description: "股票代號" },
+          asOfDate: { type: "string", description: "計算到這天為止（含當天）的股數與成本，格式 YYYY-MM-DD" },
+        },
+        required: ["symbol", "asOfDate"],
+      },
+    },
+  },
 ];
 
-const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history"];
+const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history", "get_holding_cost_asof"];
 
 export async function onRequestPost(context) {
   try {
