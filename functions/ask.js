@@ -1,5 +1,5 @@
 /**
- * ask.js — 4.6-ask-free-16 (Optimized Version)
+ * ask.js — 4.6-ask-free-16.1-final-safe
  *
  * POST /ask
  * body: {
@@ -9,13 +9,11 @@
  * }
  * 回傳: { ok: true, reply } 或 { ok: true, toolCalls: [{ name, arguments }] }
  *
- * Cloudflare Pages → Settings → Functions → 
- * 1. AI bindings → Variable name: AI
- * 2. Environment variables → Variable name: ASK_SECRET, Value: (你的自訂密碼，例如: my-super-secret) [可選，設定後需在前端帶 Header]
+ * Cloudflare Pages → Settings → Functions → AI bindings → Variable name: AI
  */
-const ASK_VERSION = "4.6-ask-free-16";
+const ASK_VERSION = "4.6-ask-free-16.1-final-safe";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
-const MAX_HISTORY_TURNS = 6;
+const MAX_HISTORY_TURNS = 6; // 再縮一點省輸入 token
 const MAX_MESSAGE_LEN = 2000;
 const MAX_HISTORY_CONTENT = 3000;
 const MAX_CONTEXT_LEN = 4000;
@@ -55,20 +53,24 @@ query_app_data 是唯讀查詢，可直接呼叫，不用確認卡。
 手機小視窗：回答簡潔。可結合最近對話理解省略句。
 你不是財務顧問，不要給應買應賣建議，可中性說明資訊。`;
 
+const WEEKDAY_ZH = ["日", "一", "二", "三", "四", "五", "六"];
+
 function taiwanNowLabel() {
-  const options = {
-    timeZone: 'Asia/Taipei',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', weekday: 'short',
-    hour12: false
-  };
-  const formatted = new Intl.DateTimeFormat('zh-TW', options).format(new Date());
-  return `${formatted}（台灣時間 UTC+8）`;
+  const now = new Date();
+  const t = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const y = t.getUTCFullYear();
+  const m = String(t.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(t.getUTCDate()).padStart(2, "0");
+  const hh = String(t.getUTCHours()).padStart(2, "0");
+  const mm = String(t.getUTCMinutes()).padStart(2, "0");
+  const weekday = WEEKDAY_ZH[t.getUTCDay()];
+  return `${y}-${m}-${d}（星期${weekday}）${hh}:${mm}（台灣時間 UTC+8）`;
 }
 
 function taiwanTodayStr() {
-  const options = { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' };
-  return new Intl.DateTimeFormat('zh-TW', options).format(new Date()).replace(/\//g, '-');
+  const now = new Date();
+  const t = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
 }
 
 const TOOLS = [
@@ -142,7 +144,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "query_app_data",
-      description: "唯讀查詢：每日資產/本金、交易、配息、過去持有成本。需要歷史數字時主動使用。",
+      description: "唯讀查詢總入口。需要 App 內歷史數字時主動使用並一次選對 source + aggregation：區間變化用 daily_records+start_end；單日絕對值用 daily_records+summary；月趨勢用 daily_records+monthly；極值用 daily_records+min_max；交易/配息統計用 trades/dividends+summary；列表才用 records；過去持有成本用 holding_cost。",
       parameters: {
         type: "object",
         properties: {
@@ -174,18 +176,32 @@ const TOOLS = [
       },
     },
   },
-];
+ ];
+
+const ALLOWED_TOOL_NAMES = new Set([
+  "add_trade",
+  "update_holding_target",
+  "update_manual_avg_cost",
+  "update_goal",
+  "query_app_data",
+]);
+
+function friendlyAiError(message) {
+  const s = String(message || "");
+  if (/neuron|quota|limit|daily|exceeded|usage/i.test(s)) {
+    return "今日 AI 免費額度可能已用完，等額度重置後再試。";
+  }
+  if (/unauthorized|forbidden|401|403/i.test(s)) {
+    return "AI 服務授權失敗，請檢查 Cloudflare 設定。";
+  }
+  if (/binding|AI binding|env\.AI/i.test(s)) {
+    return "尚未設定 Cloudflare AI Binding（Variable name: AI）。";
+  }
+  return s || "ask function failed";
+}
 
 export async function onRequestPost(context) {
   try {
-    const secret = context.env.ASK_SECRET;
-    if (secret) {
-      const auth = context.request.headers.get("Authorization");
-      if (auth !== `Bearer ${secret}`) {
-        return jsonResponse({ error: "未授權的請求 (Unauthorized)", version: ASK_VERSION }, 401);
-      }
-    }
-
     const ai = context.env.AI;
     if (!ai) {
       return jsonResponse(
@@ -229,7 +245,6 @@ export async function onRequestPost(context) {
       messages,
       max_tokens: MAX_TOKENS,
       tools: TOOLS,
-      chat_template_kwargs: { enable_thinking: false },
     });
 
     const rawToolCalls =
@@ -243,17 +258,16 @@ export async function onRequestPost(context) {
         .map((tc) => {
           const name = tc?.name || tc?.function?.name;
           let args = tc?.arguments ?? tc?.function?.arguments;
-          
           if (typeof args === "string") {
             try {
-              const cleanArgs = args.replace(/```json\n?/gi, "").replace(/```/g, "").trim();
-              args = JSON.parse(cleanArgs);
+              args = JSON.parse(args);
             } catch {
               args = {};
             }
           }
-          
-          return name ? { name, arguments: args || {} } : null;
+          return name && ALLOWED_TOOL_NAMES.has(name)
+            ? { name, arguments: args || {} }
+            : null;
         })
         .filter(Boolean);
 
@@ -272,6 +286,6 @@ export async function onRequestPost(context) {
 
     return jsonResponse({ ok: true, version: ASK_VERSION, reply });
   } catch (e) {
-    return jsonResponse({ error: e?.message || "ask function failed", version: ASK_VERSION }, 500);
+    return jsonResponse({ error: friendlyAiError(e?.message), version: ASK_VERSION }, 500);
   }
 }
