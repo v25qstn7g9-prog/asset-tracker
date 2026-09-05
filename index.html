@@ -112,7 +112,7 @@ const PencilIcon = ({ size = 15, style }) => (
 );
 
 // ---------- constants ----------
-const APP_VERSION = "4.6-personal-v2.17";
+const APP_VERSION = "4.6-personal-v2.18-newsfix";
 const BACKUP_SCHEMA_VERSION = 1;
 
 const TABS = [
@@ -1149,15 +1149,22 @@ function NewsCarousel({ holdings }) {
 
       try {
         const news = await fetchStockNews(activeHoldings);
-        if (!cancelled) { setNewsList(buildFlatList(news)); setIdx(0); setLoaded(true); }
-        // 只有真的抓到內容才寫快取；如果這次抓到空的（可能是來源排名剛好變動的暫時現象），
-        // 不要覆蓋掉快取，避免卡在「空」這個狀態長達 3 小時 —— 下次開 App 會再重試一次。
-        if (Object.keys(news || {}).length > 0) {
+        const freshList = buildFlatList(news);
+
+        if (freshList.length > 0) {
+          // 有抓到新內容：顯示並更新快取。
+          if (!cancelled) { setNewsList(freshList); setIdx(0); setLoaded(true); }
           saveKey("stockNews", { news, at: new Date().toISOString(), symbolsKey: activeKey });
+        } else {
+          // API 正常回應但暫時沒有新聞時，不要把畫面清空；優先沿用最後一次成功快取。
+          // 這是之前新聞卡會突然整張消失的主要漏洞。
+          const cachedList = cached ? buildFlatList(cached.news || {}) : [];
+          if (!cancelled) { setNewsList(cachedList); setIdx(0); setLoaded(true); }
         }
       } catch (e) {
-        // 抓失敗就沿用舊快取（如果有的話），沒有快取就直接不顯示這張卡片。
-        if (!cancelled) { if (cached) setNewsList(buildFlatList(cached.news || {})); setLoaded(true); }
+        // API 失敗也沿用最後一次成功快取；沒有快取才維持空白。
+        const cachedList = cached ? buildFlatList(cached.news || {}) : [];
+        if (!cancelled) { setNewsList(cachedList); setIdx(0); setLoaded(true); }
       }
     })();
     return () => { cancelled = true; };
