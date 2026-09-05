@@ -83,6 +83,8 @@ const ChevronLeft = LR.ChevronLeft || FallbackIcon;
 const ChevronRight = LR.ChevronRight || FallbackIcon;
 const ExternalLink = LR.ExternalLink || FallbackIcon;
 const Newspaper = LR.Newspaper || FallbackIcon;
+const MessageCircle = LR.MessageCircle || FallbackIcon;
+const Send = LR.Send || FallbackIcon;
 
 // Drawn inline instead of pulled from the lucide-react CDN, specifically for
 // edit/delete controls — if that CDN ever fails to load, every icon above
@@ -326,6 +328,28 @@ function relativeTimeLabel(iso) {
   if (hrs < 24) return `${hrs} 小時前`;
   const days = Math.floor(hrs / 24);
   return `${days} 天前`;
+}
+
+// ---------- AI 問答用：把目前持股狀況整理成一段純文字，讓 Claude 直接讀 ----------
+function buildPortfolioContext(holdings, goal, totalToday, totalInvested) {
+  const lines = [];
+  lines.push(`總目標：${goal?.targetYear || "-"} 年 NT$${nf(goal?.targetAmount || 0)}`);
+  lines.push(`目前總資產：NT$${nf(totalToday || 0)}`);
+  if (totalInvested != null) lines.push(`累計投入本金：NT$${nf(totalInvested)}`);
+
+  const active = holdings.filter((h) => h.symbol);
+  for (const h of active) {
+    const parts = [
+      `${h.symbol}(${h.name || ""})`,
+      `目前${nf(h.current || 0)}股`,
+      h.target2035 ? `目標${nf(h.target2035)}股(達成率${(h.pct || 0).toFixed(1)}%)` : null,
+      h.avgCost != null ? `平均成本NT$${h.avgCost.toFixed(2)}` : null,
+      h.estCostBasis != null ? `持有成本NT$${nf(h.estCostBasis)}` : null,
+      h.projectedLabel ? h.projectedLabel : null,
+    ].filter(Boolean);
+    lines.push(parts.join("，"));
+  }
+  return lines.join("\n");
 }
 
 
@@ -945,6 +969,8 @@ function AssetTracker() {
           />
         )}
       </main>
+
+      <AiChatWidget holdings={holdingsWithShares} goal={goal} totalToday={totalToday} totalInvested={totalInvested} />
 
       <TabBar tab={tab} setTab={setTab} />
     </div>
@@ -2382,6 +2408,121 @@ function Row({ children, onDelete }) {
 }
 function Empty({ text }) {
   return <div className="text-center text-xs py-6" style={{ color: COLORS.sub }}>{text}</div>;
+}
+
+// ---------------- AI 聊天/問答（浮動按鈕，任何分頁都叫得出來） ----------------
+function AiChatWidget({ holdings, goal, totalToday, totalInvested }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([]); // {role:'user'|'assistant', content}
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, open]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setError("");
+    const nextMessages = [...messages, { role: "user", content: text }];
+    setMessages(nextMessages);
+    setSending(true);
+
+    try {
+      const context = buildPortfolioContext(holdings, goal, totalToday, totalInvested);
+      const history = nextMessages.slice(0, -1); // 不含這次剛送出的訊息，那個用 message 帶
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: text, history, context }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || `問答失敗（HTTP ${res.status}）`);
+      }
+      setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
+    } catch (e) {
+      setError(e?.message || "問答失敗，請稍後再試");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)}
+        className="fixed z-40 rounded-full flex items-center justify-center"
+        style={{
+          right: 16, bottom: "calc(64px + env(safe-area-inset-bottom, 4px))",
+          width: 52, height: 52, background: COLORS.gold, color: COLORS.bg,
+          boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+        }}>
+        <MessageCircle size={24} />
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: COLORS.bg }}>
+          <div className="flex items-center justify-between px-4 py-3"
+            style={{ borderBottom: `1px solid ${COLORS.panelBorder}` }}>
+            <div className="font-bold text-sm">AI 助手</div>
+            <button onClick={() => setOpen(false)} style={{ color: COLORS.sub }}><X size={20} /></button>
+          </div>
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            {messages.length === 0 && (
+              <div className="text-xs text-center mt-6" style={{ color: COLORS.sub }}>
+                可以問我閒聊，或是問你自己的持股狀況，例如「0056 現在賺多少？」
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className="max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed"
+                  style={{
+                    background: m.role === "user" ? COLORS.gold : COLORS.panel,
+                    color: m.role === "user" ? COLORS.bg : COLORS.text,
+                    border: m.role === "user" ? "none" : `1px solid ${COLORS.panelBorder}`,
+                  }}>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {sending && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl px-3 py-2 text-sm" style={{ background: COLORS.panel, color: COLORS.sub, border: `1px solid ${COLORS.panelBorder}` }}>
+                  思考中…
+                </div>
+              </div>
+            )}
+            {error && <div className="text-xs text-center" style={{ color: COLORS.gain }}>{error}</div>}
+          </div>
+
+          <div className="px-3 py-3 flex items-end gap-2"
+            style={{ borderTop: `1px solid ${COLORS.panelBorder}`, paddingBottom: "calc(12px + env(safe-area-inset-bottom, 4px))" }}>
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={onKeyDown}
+              placeholder="輸入訊息…" rows={1}
+              className="flex-1 rounded-xl px-3 py-2 text-sm resize-none"
+              style={{ background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`, color: COLORS.text, outline: "none" }} />
+            <button onClick={send} disabled={sending || !input.trim()}
+              className="rounded-xl px-3 py-2.5 flex items-center justify-center"
+              style={{ background: COLORS.gold, color: COLORS.bg, opacity: (sending || !input.trim()) ? 0.5 : 1 }}>
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
 
 function TabBar({ tab, setTab }) {
