@@ -79,6 +79,10 @@ const Target = LR.Target || FallbackIcon;
 const Download = LR.Download || FallbackIcon;
 const Upload = LR.Upload || FallbackIcon;
 const ShieldCheck = LR.ShieldCheck || FallbackIcon;
+const ChevronLeft = LR.ChevronLeft || FallbackIcon;
+const ChevronRight = LR.ChevronRight || FallbackIcon;
+const ExternalLink = LR.ExternalLink || FallbackIcon;
+const Newspaper = LR.Newspaper || FallbackIcon;
 
 // Drawn inline instead of pulled from the lucide-react CDN, specifically for
 // edit/delete controls — if that CDN ever fails to load, every icon above
@@ -293,6 +297,35 @@ async function fetchQuotesWithFallback(symbols) {
     throw new Error(data?.error || `報價 API 失敗（HTTP ${res.status}）`);
   }
   return data.quotes;
+}
+
+// ---------- news helpers (持股新聞摘要，Cloudflare Function: /news) ----------
+async function fetchStockNews(activeHoldings) {
+  if (!activeHoldings.length) return {};
+  const symbols = activeHoldings.map((h) => h.symbol).join(",");
+  const names = activeHoldings.map((h) => h.name || "").join(",");
+  const url = `/news?symbols=${encodeURIComponent(symbols)}&names=${encodeURIComponent(names)}&_ts=${Date.now()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error(`新聞 API 回傳格式錯誤（HTTP ${res.status}）`);
+  }
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || `新聞 API 失敗（HTTP ${res.status}）`);
+  }
+  return data.news || {};
+}
+
+function relativeTimeLabel(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 60) return `${Math.max(1, mins)} 分鐘前`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} 小時前`;
+  const days = Math.floor(hrs / 24);
+  return `${days} 天前`;
 }
 
 
@@ -959,6 +992,112 @@ function Header({ goal, totalToday, goalDate }) {
   );
 }
 
+// ---------------- News Carousel (dashboard) ----------------
+// 只顯示「今天有新消息」的持股，逐則輪播；完全沒有任何新消息時整張卡片不渲染。
+function NewsCarousel({ holdings }) {
+  const [newsList, setNewsList] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const touchStartX = useRef(null);
+
+  const activeHoldings = holdings.filter((h) => Number(h.current || 0) > 0 && h.symbol);
+  const activeKey = activeHoldings.map((h) => h.symbol).sort().join(",");
+
+  const buildFlatList = (newsBySymbol) => {
+    const list = [];
+    for (const h of activeHoldings) {
+      const items = newsBySymbol[h.symbol];
+      if (!items) continue;
+      for (const it of items) list.push({ ...it, symbol: h.symbol, name: h.name });
+    }
+    return list;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // 快取 3 小時內、且持股組合沒變就直接沿用，避免每次開 App 都重新打新聞來源。
+      const cached = await loadKey("stockNews", null);
+      const freshEnough = cached && cached.symbolsKey === activeKey &&
+        (Date.now() - new Date(cached.at).getTime()) < 3 * 3600 * 1000;
+
+      if (freshEnough) {
+        if (!cancelled) { setNewsList(buildFlatList(cached.news || {})); setIdx(0); setLoaded(true); }
+        return;
+      }
+      if (!activeHoldings.length) { if (!cancelled) setLoaded(true); return; }
+
+      try {
+        const news = await fetchStockNews(activeHoldings);
+        if (!cancelled) { setNewsList(buildFlatList(news)); setIdx(0); setLoaded(true); }
+        saveKey("stockNews", { news, at: new Date().toISOString(), symbolsKey: activeKey });
+      } catch (e) {
+        // 抓失敗就沿用舊快取（如果有的話），沒有快取就直接不顯示這張卡片。
+        if (!cancelled) { if (cached) setNewsList(buildFlatList(cached.news || {})); setLoaded(true); }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey]);
+
+  if (!loaded || newsList.length === 0) return null;
+
+  const goTo = (i) => setIdx(((i % newsList.length) + newsList.length) % newsList.length);
+  const onTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+  const onTouchEnd = (e) => {
+    if (touchStartX.current == null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    if (dx > 40) goTo(idx - 1);
+    else if (dx < -40) goTo(idx + 1);
+    touchStartX.current = null;
+  };
+
+  const item = newsList[idx];
+
+  return (
+    <div className="rounded-2xl p-4" style={{
+      background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`,
+      boxShadow: "0 4px 16px rgba(0,0,0,0.28)",
+    }} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.sub }}>
+          <Newspaper size={13} /> 持股新聞
+        </div>
+        {newsList.length > 1 && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => goTo(idx - 1)} style={{ color: COLORS.sub }}><ChevronLeft size={16} /></button>
+            <button onClick={() => goTo(idx + 1)} style={{ color: COLORS.sub }}><ChevronRight size={16} /></button>
+          </div>
+        )}
+      </div>
+
+      <div className="text-xs font-bold mono" style={{ color: COLORS.gold }}>{item.symbol}｜{item.name}</div>
+      <div className="text-sm font-bold mt-1 leading-snug">{item.title}</div>
+      <div className="text-[11px] mt-1.5" style={{ color: COLORS.sub }}>
+        {item.source ? `${item.source} · ` : ""}{relativeTimeLabel(item.pubDate)}
+      </div>
+
+      <a href={item.link} target="_blank" rel="noreferrer"
+        className="inline-flex items-center gap-1 mt-2.5 text-xs font-bold rounded-lg px-3 py-1.5"
+        style={{ background: COLORS.gold, color: COLORS.bg }}>
+        查看新聞 <ExternalLink size={12} />
+      </a>
+
+      {newsList.length > 1 && (
+        <div className="flex justify-center gap-1.5 mt-3">
+          {newsList.map((_, i) => (
+            <div key={i} className="rounded-full" style={{
+              width: i === idx ? 14 : 6, height: 6,
+              background: i === idx ? COLORS.gold : COLORS.panelBorder,
+              transition: "width 0.2s",
+            }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------- Live Price Panel (dashboard) ----------------
 function LivePricePanel({ holdings, onFillDailyTw }) {
   const [live, setLive] = useState({});      // symbol -> { price, prevClose, isUS, asOfDate, isStale }
@@ -1221,6 +1360,8 @@ function Dashboard({ totalToday, dailyChange, dailyChangePct, capitalGain, total
   }, [chartData, chartRangeId]);
   return (
     <div className="space-y-4">
+      <NewsCarousel holdings={holdings} />
+
       <div className="rounded-2xl p-4" style={{
         background: COLORS.panel, border: `1px solid ${COLORS.panelBorder}`,
         boxShadow: "0 4px 16px rgba(0,0,0,0.28)",
