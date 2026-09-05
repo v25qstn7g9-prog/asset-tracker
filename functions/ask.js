@@ -23,9 +23,9 @@
  * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
  */
 
-const ASK_VERSION = "4.6-ask-free-12";
+const ASK_VERSION = "4.6-ask-free-13";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
-const MAX_HISTORY_TURNS = 16; // 多保留一些上下文，讓短句/代名詞也能接得上前文
+const MAX_HISTORY_TURNS = 8; // 縮短保留輪數以省用量；太久以前的對話對回答通常沒幫助
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
