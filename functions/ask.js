@@ -23,7 +23,7 @@
  * 免費額度：每帳號每天 10,000 neurons，個人使用完全夠用，超過才會計費。
  */
 
-const ASK_VERSION = "4.6-ask-free-11";
+const ASK_VERSION = "4.6-ask-free-12";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_TURNS = 16; // 多保留一些上下文，讓短句/代名詞也能接得上前文
 
@@ -67,13 +67,17 @@ min_max 找漲最多跌最多的月份）都是用程式碼精算好的結果，
 用法舉例：
 - 「現在」的持股成本不用查，摘要裡已經有了；「過去某個日期」的成本才用
   source=holding_cost 帶 symbol+asOfDate。
-- 「從A到B資產/本金/損益變化多少」用 source=daily_records、aggregation=start_end
+- 「從A到B資產/本金/損益變化/增加多少」用 source=daily_records、aggregation=start_end
   帶 fromDate/toDate，直接拿到算好的差額，不要自己相減。
+- 「A這天/當下總共投入本金是多少」（問絕對金額，不是問變化量）用 source=daily_records、
+  aggregation=summary，只填 toDate（或 fromDate=toDate 都填同一天），看回傳裡那一天的
+  totalCost 絕對值，不要跟 start_end 搞混。
 - 「今年哪個月資產掉最多」這類問題用 source=daily_records、aggregation=min_max。
 - 想看月度趨勢用 aggregation=monthly；要看原始紀錄、瀏覽明細才用 records。
 - 查交易用 source=trades；查配息用 source=dividends；兩者統計數字用
   aggregation=summary（一樣是算好的），列表才用 records。
-- 你可以連續查詢多次：先查一份，再依結果決定要不要查第二份來比較或補充。
+- 你可以連續查詢多次，但同一個問題最多查 2 次；如果查了 2 次還是不確定使用者要
+  「變化量」還是「絕對金額」，直接用文字問使用者是哪一種，不要一直換方式重查。
 
 這是手機上的小聊天視窗，回答簡潔清楚、口氣自然就好，不用太拘謹，但也不要為了顯得
 活潑而扯不相關的話或加一堆語助詞。如果使用者用很短的句子、代名詞、省略句，
