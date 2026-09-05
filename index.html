@@ -2568,11 +2568,11 @@ function validateToolCall(tc) {
   }
 }
 
-const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history"];
+const READ_TOOL_NAMES = ["get_trade_history", "get_daily_records", "get_dividend_history", "get_holding_cost_asof"];
 
 // 唯讀查詢工具的實際執行：直接從目前 App 的資料裡撈，完全不會動到任何資料，
 // 所以不用跳確認卡片，AI 要用就自動給它，讓它有辦法回答超出預設摘要範圍的問題。
-function executeReadTool(tc, { trades, dailyRecords, dividends }) {
+function executeReadTool(tc, { trades, dailyRecords, dividends, holdings }) {
   const a = tc.arguments || {};
   switch (tc.name) {
     case "get_trade_history": {
@@ -2590,10 +2590,22 @@ function executeReadTool(tc, { trades, dailyRecords, dividends }) {
       }).join("\n");
     }
     case "get_daily_records": {
-      const days = Math.min(365, Number(a.days) || 90);
-      const list = [...(dailyRecords || [])].sort((x, y) => x.date.localeCompare(y.date)).slice(-days);
-      if (!list.length) return "（沒有每日紀錄）";
-      return list.map((r) => `${r.date} 資產NT$${nf((r.twValue || 0) + (r.usValue || 0))}（台股${nf(r.twValue || 0)}+美股${nf(r.usValue || 0)}）`).join("\n");
+      let list = [...(dailyRecords || [])].sort((x, y) => x.date.localeCompare(y.date));
+      if (a.fromDate || a.toDate) {
+        // 指定日期區間查詢：適合「某段期間本金/資產變化」這種問題，直接給頭尾兩天精準比對。
+        if (a.fromDate) list = list.filter((r) => r.date >= a.fromDate);
+        if (a.toDate) list = list.filter((r) => r.date <= a.toDate);
+      } else {
+        const days = Math.min(365, Number(a.days) || 90);
+        list = list.slice(-days);
+      }
+      if (!list.length) return "（這個範圍沒有每日紀錄）";
+      return list.map((r) => {
+        const asset = (r.twValue || 0) + (r.usValue || 0);
+        const cost = (r.twCost || 0) + (r.usCost || 0);
+        return `${r.date} 資產NT$${nf(asset)}（台股${nf(r.twValue || 0)}+美股${nf(r.usValue || 0)}），` +
+          `投入成本NT$${nf(cost)}（台股${nf(r.twCost || 0)}+美股${nf(r.usCost || 0)}）`;
+      }).join("\n");
     }
     case "get_dividend_history": {
       const limit = Math.min(200, Number(a.limit) || 100);
@@ -2602,6 +2614,34 @@ function executeReadTool(tc, { trades, dailyRecords, dividends }) {
       list = list.slice(-limit);
       if (!list.length) return "（沒有符合條件的配息紀錄）";
       return list.map((d) => `${d.date} ${d.symbol} ${nf(d.shares)}股 @NT$${d.perShare}/股 = NT$${nf(d.amount)}`).join("\n");
+    }
+    case "get_holding_cost_asof": {
+      const h = (holdings || []).find((x) => x.symbol === a.symbol);
+      const initialShares = h ? Number(h.initialShares || 0) : 0;
+      const symbolTrades = (trades || [])
+        .filter((t) => t.symbol === a.symbol && t.date <= a.asOfDate)
+        .slice()
+        .sort((x, y) => x.date.localeCompare(y.date));
+
+      let shares = initialShares;
+      let cost = 0; // 期初股數的成本沒有記錄，這裡當作0，結果只反映交易紀錄部分
+      for (const t of symbolTrades) {
+        if (t.action === "buy") {
+          cost += t.shares * t.price + Number(t.fee || 0);
+          shares += t.shares;
+        } else if (shares > 0) {
+          const avgPerShare = cost / shares;
+          const sellShares = Math.min(t.shares, shares);
+          cost -= avgPerShare * sellShares;
+          shares -= sellShares;
+        }
+      }
+      const avgCost = shares > 0 ? cost / shares : null;
+      const caveat = initialShares > 0
+        ? "（注意：期初股數的成本沒有記錄，這個均價只反映交易紀錄部分，可能不完全準確）"
+        : "";
+      if (shares <= 0) return `截至${a.asOfDate}：${a.symbol} 股數為0或查無資料${caveat}`;
+      return `截至${a.asOfDate}：${a.symbol} 股數${nf(shares)}股，均價NT$${avgCost.toFixed(2)}，總成本NT$${nf(Math.round(cost))}${caveat}`;
     }
     default:
       return null;
@@ -2655,7 +2695,7 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested, trades, setTr
       let rounds = 0;
       while (Array.isArray(data.toolCalls) && data.toolCalls.every((tc) => READ_TOOL_NAMES.includes(tc.name)) && rounds < 1) {
         const fetched = data.toolCalls
-          .map((tc) => `【查詢結果：${tc.name}(${JSON.stringify(tc.arguments)})】\n${executeReadTool(tc, { trades, dailyRecords, dividends })}`)
+          .map((tc) => `【查詢結果：${tc.name}(${JSON.stringify(tc.arguments)})】\n${executeReadTool(tc, { trades, dailyRecords, dividends, holdings })}`)
           .join("\n\n");
         const augmentedContext = `${baseContext}\n\n以下是你剛剛主動查詢到的額外資料，直接拿來回答，不要再重複查詢同樣的東西：\n${fetched}`;
         data = await askOnce(text, history, augmentedContext);
