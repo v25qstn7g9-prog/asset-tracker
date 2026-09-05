@@ -1,8 +1,6 @@
 {
   "version": 1,
-  "include": [
-    "/quote",
-    "/news"
-  ],
+  "include": ["/quote", "/news", "/ask"],
   "exclude": []
 }
+
