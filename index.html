@@ -766,8 +766,7 @@ function AssetTracker() {
           const target = new Date(now.getTime() + monthsNeeded * 30.44 * 86400000);
           const y = target.getFullYear();
           const m = String(target.getMonth() + 1).padStart(2, "0");
-          const d = String(target.getDate()).padStart(2, "0");
-          projectedLabel = `預定達成：${y}/${m}/${d}`;
+          projectedLabel = `預定 ${y}/${m}`;
         } else {
           projectedLabel = "無法推估";
         }
@@ -1770,10 +1769,7 @@ function HoldingsPanel({ holdings, setHoldings }) {
                   </div>
                   <div className="flex justify-between text-xs mono mt-2">
                     <span style={{ color: COLORS.sub }}>目前 {nf(h.current)} 股</span>
-                    <span style={{ color: COLORS.sub }}>
-                      目標 {nf(h.target2035)} 股
-                      {h.projectedLabel && <span className="text-[10px]"> ({h.projectedLabel})</span>}
-                    </span>
+                    <span style={{ color: COLORS.sub }}>目標 {nf(h.target2035)} 股</span>
                   </div>
                   <div className="text-[11px] mono mt-1" style={{ color: COLORS.sub }}>
                     第 {h.quarterNum} 季增加 <span style={{ color: h.quarterSharesAdded >= 0 ? COLORS.text : COLORS.gain }}>
@@ -1783,7 +1779,8 @@ function HoldingsPanel({ holdings, setHoldings }) {
                   <div className="mt-1 h-1.5 rounded-full overflow-hidden" style={{ background: COLORS.panelBorder }}>
                     <div className="h-full rounded-full" style={{ width: `${h.pct}%`, background: COLORS.gold }} />
                   </div>
-                  <div className="text-right mt-1">
+                  <div className="flex justify-between items-baseline mt-1">
+                    <span className="text-[11px] mono" style={{ color: COLORS.sub }}>{h.projectedLabel}</span>
                     <span className="text-[11px] mono" style={{ color: COLORS.gold }}>
                       達成率 {h.pct.toFixed(1)}%
                     </span>
