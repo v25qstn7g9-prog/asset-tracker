@@ -265,7 +265,7 @@ export async function onRequestPost(context) {
       if (!calls.length) return;
       messages.push({
         role: "assistant",
-        content: null,
+        content: "",
         tool_calls: calls.map((tc) => ({
           id: String(tc?.id || ""),
           type: "function",
