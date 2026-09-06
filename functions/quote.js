@@ -14,7 +14,7 @@
  */
 
 const SYMBOL_PATTERN = /^[0-9]{4,6}[A-Z]?$/;
-const QUOTE_VERSION = "4.6-quote-stable-10";
+const QUOTE_VERSION = "4.6-quote-stable-11";
 
 function isAllowedSymbol(s) {
   return SYMBOL_PATTERN.test(s);
@@ -858,31 +858,22 @@ export async function onRequestGet(
         ),
       ];
 
+    const missing = symbols.filter((s) => !quotes[s]);
+    const complete = missing.length === 0;
+
     return jsonResponse({
       ok: true,
-
-      version:
-        QUOTE_VERSION,
-
-      source:
-        sources.join("+"),
-
-      fetchedAt:
-        new Date()
-          .toISOString(),
-
+      version: QUOTE_VERSION,
+      status: complete ? "complete" : "partial",
+      complete,
+      requestedCount: symbols.length,
+      resolvedCount: symbols.length - missing.length,
+      source: sources.join("+"),
+      fetchedAt: new Date().toISOString(),
       day,
-
       quotes,
-
-      missing:
-        symbols.filter(
-          (s) =>
-            !quotes[s]
-        ),
-
-      warnings:
-        errors,
+      missing,
+      warnings: errors,
     });
   } catch (e) {
     return jsonResponse(

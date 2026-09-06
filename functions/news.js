@@ -8,7 +8,7 @@
  * - 保留 ?debug=1 方便檢查每檔實際使用來源與錯誤
  */
 
-const NEWS_VERSION = "4.6-news-stable-5";
+const NEWS_VERSION = "4.6-news-stable-6";
 const SYMBOL_PATTERN = /^[0-9A-Za-z.]{1,10}$/;
 
 function isAllowedSymbol(s) {
@@ -64,7 +64,22 @@ async function fetchJsonWithRetry(url) {
   }
 }
 
-function yahooItemsFromData(data, cutoff, maxPerSymbol) {
+function compactText(s) {
+  return String(s || "").toLowerCase().replace(/[\s\u3000\-_.()（）]/g, "");
+}
+
+function isRelevantTitle(title, symbol, name) {
+  const t = compactText(title);
+  const sym = compactText(symbol);
+  const nm = compactText(name);
+  if (sym && t.includes(sym)) return true;
+  if (nm && nm.length >= 2 && t.includes(nm)) return true;
+  // 常見名稱尾綴去掉後再比一次，避免「元大台灣50 ETF」與「元大台灣50」差一個尾綴。
+  const shortName = nm.replace(/etf|基金|股份有限公司|公司/g, "");
+  return shortName.length >= 3 && t.includes(shortName);
+}
+
+function yahooItemsFromData(data, cutoff, maxPerSymbol, symbol, name) {
   const rawItems = Array.isArray(data?.news) ? data.news : [];
   const seen = new Set();
   const items = [];
@@ -76,6 +91,7 @@ function yahooItemsFromData(data, cutoff, maxPerSymbol) {
     const pubMs = item?.providerPublishTime ? Number(item.providerPublishTime) * 1000 : null;
 
     if (!title || !link || pubMs == null || Number.isNaN(pubMs) || pubMs < cutoff) continue;
+    if (!isRelevantTitle(title, symbol, name)) continue;
     const key = normalizeTitleKey(title);
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -138,7 +154,7 @@ async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug
     `&newsCount=${newsCount}&quotesCount=0&lang=zh-Hant-TW&region=TW`;
   try {
     const data = await fetchJsonWithRetry(yahoo1);
-    const parsed = yahooItemsFromData(data, cutoff, maxPerSymbol);
+    const parsed = yahooItemsFromData(data, cutoff, maxPerSymbol, symbol, name);
     attempts.push({ source: "yahoo-query1", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
     if (parsed.items.length) return debug ? { ...parsed, sourceUsed: "yahoo-query1", attempts } : { items: parsed.items };
   } catch (e) {
@@ -150,7 +166,7 @@ async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug
     `&newsCount=${newsCount}&quotesCount=0&lang=zh-Hant-TW&region=TW`;
   try {
     const data = await fetchJsonWithRetry(yahoo2);
-    const parsed = yahooItemsFromData(data, cutoff, maxPerSymbol);
+    const parsed = yahooItemsFromData(data, cutoff, maxPerSymbol, symbol, name);
     attempts.push({ source: "yahoo-query2", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
     if (parsed.items.length) return debug ? { ...parsed, sourceUsed: "yahoo-query2", attempts } : { items: parsed.items };
   } catch (e) {

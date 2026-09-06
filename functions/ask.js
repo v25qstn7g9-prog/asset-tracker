@@ -11,7 +11,7 @@
  *
  * Cloudflare Pages → Settings → Functions → AI bindings → Variable name: AI
  */
-const ASK_VERSION = "4.6-ask-free-16.1-final-safe";
+const ASK_VERSION = "4.6-ask-free-16.2-stable";
 const MODEL = "@cf/google/gemma-4-26b-a4b-it";
 const MAX_HISTORY_TURNS = 6; // 再縮一點省輸入 token
 const MAX_MESSAGE_LEN = 2000;
@@ -203,6 +203,18 @@ function friendlyAiError(message) {
 export async function onRequestPost(context) {
   try {
     const ai = context.env.AI;
+
+    // Optional Cloudflare Rate Limiting binding. If it is not configured,
+    // nothing changes. We only use the anonymous device id supplied by the
+    // app; we do not forward the visitor IP to the model.
+    const limiter = context.env.ASK_RATE_LIMITER;
+    const deviceId = String(context.request.headers.get("x-device-id") || "").slice(0, 80);
+    if (limiter && deviceId) {
+      const limited = await limiter.limit({ key: deviceId });
+      if (limited && limited.success === false) {
+        return jsonResponse({ error: "AI 問答太頻繁了，請稍後再試。", version: ASK_VERSION }, 429);
+      }
+    }
     if (!ai) {
       return jsonResponse(
         {
@@ -260,7 +272,8 @@ export async function onRequestPost(context) {
           let args = tc?.arguments ?? tc?.function?.arguments;
           if (typeof args === "string") {
             try {
-              args = JSON.parse(args);
+              const cleanArgs = args.replace(/```json\n?/gi, "").replace(/```/g, "").trim();
+              args = JSON.parse(cleanArgs);
             } catch {
               args = {};
             }
