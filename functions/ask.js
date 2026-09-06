@@ -11,13 +11,13 @@
  *
  * Cloudflare Pages → Settings → Functions → AI bindings → Variable name: AI
  */
-const ASK_VERSION = "4.6-ask-free-16.2-stable";
-const MODEL = "@cf/google/gemma-4-26b-a4b-it";
+const ASK_VERSION = "4.6-ask-free-17.0-gptoss120b";
+const MODEL = "@cf/openai/gpt-oss-120b";
 const MAX_HISTORY_TURNS = 6; // 再縮一點省輸入 token
 const MAX_MESSAGE_LEN = 2000;
 const MAX_HISTORY_CONTENT = 3000;
 const MAX_CONTEXT_LEN = 4000;
-const MAX_TOKENS = 500;
+const MAX_TOKENS = 1000;
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
