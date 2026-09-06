@@ -2981,7 +2981,7 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested, trades, setTr
         freshCalls.forEach((tc) => {
           fetchedHistory.push(`【查詢結果：${tc.name}(${JSON.stringify(tc.arguments)})】\n${executeReadTool(tc, { trades, dailyRecords, dividends, holdings })}`);
         });
-        const augmentedContext = `${baseContext}\n\n以下是你主動查詢到的額外資料（已累積保留所有前輪結果）。直接用這些資料回答；不要重複呼叫完全相同的查詢：\n${fetchedHistory.join("\n\n")}`;
+        const augmentedContext = `${baseContext}\n\n【查詢已完成，這是你能拿到的全部資料，不會再有更多】\n以下是系統剛剛實際執行查詢後的完整結果。你現在必須直接用這些數字組織成文字回答使用者，禁止再呼叫 query_app_data 或任何其他工具，也不要說「我再查一下」這類的話：\n${fetchedHistory.join("\n\n")}`;
         data = await askOnce(text, history, augmentedContext);
         rounds += 1;
       }
