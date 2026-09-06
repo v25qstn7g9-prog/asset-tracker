@@ -2933,14 +2933,18 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested, trades, setTr
   }, [messages, open]);
 
   // 呼叫一次 /ask，回傳解析後的資料；共用給第一次發問跟「自動查詢後再問一次」用。
-  const askOnce = async (message, history, context) => {
+  // toolTurns（選填）：之前每一輪「AI 呼叫了什麼工具＋查到的結果」，用正式的
+  // assistant/tool 訊息格式接回對話，讓模型判斷「工具已經回覆過了」，不要再塞成文字。
+  const askOnce = async (message, history, context, toolTurns) => {
     const deviceIdKey = "stockTrackerDeviceId";
     let deviceId = localStorage.getItem(deviceIdKey);
     if (!deviceId) { deviceId = `d_${uid()}_${uid()}`; localStorage.setItem(deviceIdKey, deviceId); }
+    const body = { message, history, context };
+    if (Array.isArray(toolTurns) && toolTurns.length > 0) body.toolTurns = toolTurns;
     const res = await fetchWithTimeout("/ask", {
       method: "POST",
       headers: { "content-type": "application/json", "x-device-id": deviceId },
-      body: JSON.stringify({ message, history, context }),
+      body: JSON.stringify(body),
     }, 20000);
     const data = await res.json().catch(() => null);
     if (!res.ok || !data?.ok) {
@@ -2965,12 +2969,13 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested, trades, setTr
 
       let data = await askOnce(text, history, baseContext);
 
-      // 如果 AI 呼叫的是唯讀查詢工具，直接自動執行、把查到的資料補進 context 再幫它問一次，
-      // 使用者完全不用介入；最多自動追問一輪，避免萬一 AI 一直要求查詢造成無限迴圈。
+      // 如果 AI 呼叫的是唯讀查詢工具，直接自動執行、把查到的結果用正式的 tool 訊息
+      // 接回對話再幫它問一次，使用者完全不用介入；最多自動追問一輪，避免萬一 AI 一直
+      // 要求查詢造成無限迴圈。toolTurns 會依序累積每一輪的呼叫+結果，一起送給 /ask。
       let rounds = 0;
-      const fetchedHistory = [];
+      const toolTurns = [];
       const seenReadCalls = new Set();
-      while (Array.isArray(data.toolCalls) && data.toolCalls.every((tc) => READ_TOOL_NAMES.includes(tc.name)) && rounds < 2) {
+      while (Array.isArray(data.toolCalls) && data.toolCalls.length > 0 && data.toolCalls.every((tc) => READ_TOOL_NAMES.includes(tc.name)) && rounds < 2) {
         const freshCalls = data.toolCalls.filter((tc) => {
           const key = `${tc.name}:${JSON.stringify(tc.arguments || {})}`;
           if (seenReadCalls.has(key)) return false;
@@ -2978,11 +2983,12 @@ function AiChatWidget({ holdings, goal, totalToday, totalInvested, trades, setTr
           return true;
         });
         if (!freshCalls.length) break;
-        freshCalls.forEach((tc) => {
-          fetchedHistory.push(`【查詢結果：${tc.name}(${JSON.stringify(tc.arguments)})】\n${executeReadTool(tc, { trades, dailyRecords, dividends, holdings })}`);
-        });
-        const augmentedContext = `${baseContext}\n\n【查詢已完成，這是你能拿到的全部資料，不會再有更多】\n以下是系統剛剛實際執行查詢後的完整結果。你現在必須直接用這些數字組織成文字回答使用者，禁止再呼叫 query_app_data 或任何其他工具，也不要說「我再查一下」這類的話：\n${fetchedHistory.join("\n\n")}`;
-        data = await askOnce(text, history, augmentedContext);
+        const results = freshCalls.map((tc) => ({
+          id: tc.id,
+          content: executeReadTool(tc, { trades, dailyRecords, dividends, holdings }),
+        }));
+        toolTurns.push({ calls: freshCalls, results });
+        data = await askOnce(text, history, baseContext, toolTurns);
         rounds += 1;
       }
 
