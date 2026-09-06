@@ -38,7 +38,8 @@ const SYSTEM_PROMPT_BASE = `你是內嵌在個人存股資產追蹤 App 的助�
 執行動作必須用工具（function calling），你無法直接改資料；App 會顯示確認卡，使用者按確定才生效。
 資訊不夠（缺股數、價格等）先用文字問清楚，不要瞎猜後呼叫工具。
 
-query_app_data 是唯讀查詢，可直接呼叫，不用確認卡。
+query_app_data 是唯讀查詢，可直接呼叫，不用確認卡。系統會把查詢結果以正式的工具回覆（tool 訊息）交給你，
+收到工具回覆後就代表查詢已完成，直接根據內容用文字回答，不要再次呼叫同一個查詢。
 【重要】彙總結果都已由程式算好，不要自己對 records 明細手動加減比較。
 - 現在持股成本：看摘要即可
 - 過去某日成本：source=holding_cost + symbol + asOfDate
@@ -253,6 +254,36 @@ export async function onRequestPost(context) {
       { role: "user", content: message },
     ];
 
+    // 標準工具呼叫來回：把之前每一輪「AI 呼叫了什麼工具」+「實際查到的結果」
+    // 用正式的 assistant tool_calls + tool 訊息接回對話，而不是塞成一段文字。
+    // 這樣不管幾輪，模型都能正確判斷「工具已經回覆」，不會再重複呼叫同一個查詢。
+    // toolTurns: [{ calls: [{id,name,arguments}], results: [{id,content}] }, ...]（依發生順序）
+    const toolTurns = Array.isArray(body?.toolTurns) ? body.toolTurns : [];
+    toolTurns.forEach((turn) => {
+      const calls = Array.isArray(turn?.calls) ? turn.calls : [];
+      const results = Array.isArray(turn?.results) ? turn.results : [];
+      if (!calls.length) return;
+      messages.push({
+        role: "assistant",
+        content: null,
+        tool_calls: calls.map((tc) => ({
+          id: String(tc?.id || ""),
+          type: "function",
+          function: {
+            name: String(tc?.name || ""),
+            arguments: JSON.stringify(tc?.arguments || {}),
+          },
+        })),
+      });
+      results.forEach((tr) => {
+        messages.push({
+          role: "tool",
+          tool_call_id: String(tr?.id || ""),
+          content: String(tr?.content || "").slice(0, MAX_CONTEXT_LEN),
+        });
+      });
+    });
+
     const result = await ai.run(MODEL, {
       messages,
       max_tokens: MAX_TOKENS,
@@ -267,7 +298,7 @@ export async function onRequestPost(context) {
 
     if (Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
       const toolCalls = rawToolCalls
-        .map((tc) => {
+        .map((tc, idx) => {
           const name = tc?.name || tc?.function?.name;
           let args = tc?.arguments ?? tc?.function?.arguments;
           if (typeof args === "string") {
@@ -278,8 +309,10 @@ export async function onRequestPost(context) {
               args = {};
             }
           }
+          // 有些模型不會回傳 id，這裡補一個穩定的 fallback，讓下一輪可以正確對應回去。
+          const id = String(tc?.id || tc?.tool_call_id || `call_${idx}`);
           return name && ALLOWED_TOOL_NAMES.has(name)
-            ? { name, arguments: args || {} }
+            ? { id, name, arguments: args || {} }
             : null;
         })
         .filter(Boolean);
