@@ -237,6 +237,6 @@ export async function onRequestGet(context) {
       ...(debug ? { debugInfo } : {}),
     });
   } catch (e) {
-    return jsonResponse({ error: e?.message || "news function failed", version: NEWS_VERSION }, 500);
+    return jsonResponse({ error: "新聞服務暫時無法使用", version: NEWS_VERSION }, 500);
   }
 }
