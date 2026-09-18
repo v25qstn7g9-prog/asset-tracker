@@ -158,7 +158,7 @@ async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug
     attempts.push({ source: "yahoo-query1", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
     if (parsed.items.length) return debug ? { ...parsed, sourceUsed: "yahoo-query1", attempts } : { items: parsed.items };
   } catch (e) {
-    attempts.push({ source: "yahoo-query1", ok: false, error: String(e?.message || e) });
+    attempts.push({ source: "yahoo-query1", ok: false, error: "上游新聞來源暫時失敗" });
   }
 
   // 2) Yahoo query2（同服務另一個 host，Cloudflare 對外路徑偶爾不同）
@@ -170,7 +170,7 @@ async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug
     attempts.push({ source: "yahoo-query2", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
     if (parsed.items.length) return debug ? { ...parsed, sourceUsed: "yahoo-query2", attempts } : { items: parsed.items };
   } catch (e) {
-    attempts.push({ source: "yahoo-query2", ok: false, error: String(e?.message || e) });
+    attempts.push({ source: "yahoo-query2", ok: false, error: "上游新聞來源暫時失敗" });
   }
 
   // 3) Bing News RSS 備援。中文名稱對 ETF/台股通常比只用 ticker 更容易找到新聞。
@@ -183,7 +183,7 @@ async function fetchNewsForSymbol(symbol, name, windowHours, maxPerSymbol, debug
     attempts.push({ source: "bing-rss", ok: true, rawCount: parsed.rawCount, kept: parsed.items.length });
     return debug ? { ...parsed, sourceUsed: parsed.items.length ? "bing-rss" : "none", attempts } : { items: parsed.items };
   } catch (e) {
-    attempts.push({ source: "bing-rss", ok: false, error: String(e?.message || e) });
+    attempts.push({ source: "bing-rss", ok: false, error: "上游新聞來源暫時失敗" });
     return debug ? { items: [], rawCount: 0, sourceUsed: "none", attempts } : { items: [] };
   }
 }
@@ -222,7 +222,7 @@ export async function onRequestGet(context) {
           attempts: r.value.attempts,
         };
       } else {
-        warnings.push(`${sym}: ${r.reason?.message || r.reason}`);
+        warnings.push(`${sym}: 新聞來源暫時失敗`);
       }
     });
 
